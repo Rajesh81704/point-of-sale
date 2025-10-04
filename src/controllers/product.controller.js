@@ -256,8 +256,24 @@ const showProductController = async (req, res) => {
 
 	if (!user) return res.status(401).json({ error: "Unauthorized" });
 	const userId = user.id;
-	const searchQuery = `SELECT p.barcode, p.name, p.price, s.stock FROM products p INNER JOIN stocks s ON p.pk = s.product_id WHERE p.name ILIKE $1 OR p.barcode ILIKE $1 OR p.description ILIKE $1 OR p.category ILIKE $1 OR p.brand ILIKE $1  and p.user_id=$2 ORDER BY p.name ASC`;
-
+	const searchQuery = `
+	SELECT 
+		p.barcode, 
+		p.name, 
+		p.price, 
+		s.stock 
+	FROM products p 
+	INNER JOIN stocks s 
+		ON p.pk = s.product_id 
+	WHERE 
+		(COALESCE(p.name, '') ILIKE $1 
+		OR COALESCE(p.barcode, '') ILIKE $1 
+		OR COALESCE(p.description, '') ILIKE $1 
+		OR COALESCE(p.category, '') ILIKE $1 
+		OR COALESCE(p.brand, '') ILIKE $1)
+		AND p.user_id = $2
+	ORDER BY p.name ASC
+	`;
 	pool.query(searchQuery, [`%${productKeywords}%`, userId], (err, result) => {
 		if (err) {
 			console.error("Error searching products:", err);
