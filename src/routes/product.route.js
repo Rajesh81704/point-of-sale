@@ -23,10 +23,10 @@ productRouter.post("/proceed-cart", protectedRoute, proceedCartController);
 
 productRouter.post("/finalize-sale", protectedRoute, finalizeSaleController);
 
-productRouter.get("/show-product", protectedRoute, showProductController);
+productRouter.post("/show-product", protectedRoute, showProductController);
 
 productRouter.get("/stock-alert", protectedRoute, stockAlertController);
 
-productRouter.get("/sales-report", protectedRoute, salesReportController);
+productRouter.post("/sales-report", protectedRoute, salesReportController);
 
 export { productRouter };
