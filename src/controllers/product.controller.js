@@ -58,6 +58,7 @@ const checkoutProductController = async (req, res) => {
 		return res.status(400).json({ error: "Barcode is required" });
 	}
 	const client = await pool.connect();
+	client.query("BEGIN");
 	const user = await getUserDtlsWithToken(req.headers["authorization"]?.split(" ")[1]);
 	if (!user) {
 		await client.query("ROLLBACK");
@@ -76,15 +77,17 @@ const checkoutProductController = async (req, res) => {
 	const productId = productIdResult.rows[0].pk;
 	console.log("productId", productId);
 	const checkStock = "select stock from stocks where product_id=$1";
-	const stockResult = await pool.query(checkStock, [productId]);
+	const stockResult = await client.query(checkStock, [productId]);
 	if (stockResult.rows.length === 0 || stockResult.rows[0].stock <= 0) {
 		return res.status(404).json({ error: "Product not found or out of stock" });
 	}
 	const updateStockQuery = "update stocks set stock=stock-1 where product_id=$1 returning *";
-	const result = await pool.query(updateStockQuery, [productId]);
+	const result = await client.query(updateStockQuery, [productId]);
+	client.query("COMMIT");
 	if (result.rows.length === 0) {
 		return res.status(400).json({ error: "Failed to add item to cart" });
 	}
+	client.release();
 	return res.status(200).json({ message: "Item added to cart", stock: result.rows[0] });
 };
 
@@ -160,9 +163,11 @@ const proceedCartController = async (req, res) => {
 		JSON.stringify(cartItemList),
 		totalAmount,
 	]);
+	client.query("COMMIT");
 	if (insertCartListResult.rows.length === 0) {
 		return res.status(500).json({ error: "Failed to proceed cart" });
 	}
+	client.release();
 	return res.status(200).json({
 		message: "Cart proceeded",
 		cartId: insertCartListResult.rows[0].cart_id,
@@ -263,9 +268,11 @@ const showProductController = async (req, res) => {
 	(p.name ILIKE $2 OR p.barcode ILIKE $2 OR p.description ILIKE $2 OR p.category ILIKE $2 OR p.brand ILIKE $2) 
 	ORDER BY p.name ASC`;
 	const result = await client.query(searchQuery, [userId, `%${productKeywords}%`]);
+	client.query("COMMIT");
 	if (result.rows.length === 0) {
 		return res.status(404).json({ error: "No products found" });
 	}
+	client.release();
 	return res.status(200).json({ products: result.rows });
 };
 
@@ -320,6 +327,7 @@ const salesReportController = async (req, res) => {
 		}
 
 		res.status(200).json(salesData);
+		client.release();
 	} catch (err) {
 		res.status(500).json({ error: "Internal server error" });
 	}
