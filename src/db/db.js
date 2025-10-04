@@ -1,27 +1,26 @@
-import pg from 'pg';
+import pg from "pg";
 
 import "dotenv/config";
 
 if (!process.env.DATABASE_URL) {
-    throw new Error("DATABASE_URL is not defined in environment variables");
+	throw new Error("DATABASE_URL is not defined in environment variables");
 }
 
-const pool = new pg.Pool({ 
-    connectionString: process.env.DATABASE_URL,
-    ssl: {
-        rejectUnauthorized: false
-    },
-})
+const pool = new pg.Pool({
+	connectionString: process.env.DATABASE_URL,
+	ssl: {
+		rejectUnauthorized: false,
+	},
+	statement_timeout: 5000,
+	idle_in_transaction_session_timeout: 5000,
+});
 
 pool.connect((err, client, release) => {
-    if (err) {
-        console.error('Error connecting to the database:', err.stack);
-    } else {
-        console.log('Connected to the database');
-        release();
-    }
-})
+	if (err) {
+		console.error("Error connecting to the database:", err.stack);
+	} else {
+		console.log("Connected to the database");
+		release();
+	}
+});
 export { pool };
-
-
-
