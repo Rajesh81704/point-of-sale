@@ -1,0 +1,32 @@
+import express from "express";
+import { authenticateAccessToken as protectedRoute } from "../middleware/middleware.js";
+import {
+	addProductController,
+	checkoutProductController,
+	removeItemController,
+	proceedCartController,
+	finalizeSaleController,
+	showProductController,
+	stockAlertController,
+	salesReportController,
+} from "../controllers/product.controller.js";
+
+const productRouter = express.Router();
+
+productRouter.post("/add-product", protectedRoute, addProductController);
+
+productRouter.post("/checkout", protectedRoute, checkoutProductController);
+
+productRouter.post("/remove-item", protectedRoute, removeItemController);
+
+productRouter.post("/proceed-cart", protectedRoute, proceedCartController);
+
+productRouter.post("/finalize-sale", protectedRoute, finalizeSaleController);
+
+productRouter.get("/show-product", protectedRoute, showProductController);
+
+productRouter.get("/stock-alert", protectedRoute, stockAlertController);
+
+productRouter.get("/sales-report", protectedRoute, salesReportController);
+
+export { productRouter };
