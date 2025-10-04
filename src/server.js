@@ -24,19 +24,15 @@ app.use(express.json());
 app.use("/auth", authRouter);
 
 app.get("/", (req, res) => {
-	res.send("Hello World!");
+	res.send("Welcome to the ERP+POS system");
 });
 
-cron.schedule("13 0 * * *", async () => {
-	console.log("Running a task every day at midnight");
+cron.schedule("*/13 * * * *", async () => {
 	try {
-		const res = await fetch(process.env.URL, {
-			method: "GET",
-		});
-		const data = await res.text();
-		console.log("Response:", data);
+		const response = await fetch(process.env.URL);
+		console.log("Cron job executed. Response:", await response.text());
 	} catch (error) {
-		console.error("Error during fetch:", error);
+		console.error("Error during cron job execution:", error);
 	}
 });
 // routes for products
