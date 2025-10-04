@@ -252,30 +252,18 @@ const finalizeSaleController = async (req, res) => {
 
 const showProductController = async (req, res) => {
 	const { productKeywords } = req.body;
-	try {
-		const user = await getUserDtlsWithToken(req.headers["authorization"]?.split(" ")[1]);
-		if (!user) {
-			return res.status(401).json({ error: "Unauthorized" });
+	const searchQuery = `SELECT p.barcode, p.name, p.price, s.stock FROM products p INNER JOIN stocks s ON p.pk = s.product_id WHERE p.name ILIKE $1 OR p.barcode ILIKE $1 OR p.description ILIKE $1 OR p.category ILIKE $1 OR p.brand ILIKE $1 ORDER BY p.name ASC`;
+
+	pool.query(searchQuery, [`%${productKeywords}%`], (err, result) => {
+		if (err) {
+			console.error("Error searching products:", err);
+			return res.status(500).json({ error: "Internal server error" });
 		}
-		const userId = user.id;
-		const searchQuery = `
-      SELECT p.barcode, p.name, p.price, s.stock 
-      FROM products p 
-      INNER JOIN stocks s ON p.pk = s.product_id 
-      INNER JOIN users u ON p.user_id = u.pk 
-      WHERE u.pk = $1 AND 
-      (p.name ILIKE $2 OR p.barcode ILIKE $2 OR p.description ILIKE $2 OR p.category ILIKE $2 OR p.brand ILIKE $2) 
-      ORDER BY p.name ASC
-    `;
-		const result = await pool.query(searchQuery, [userId, `%${productKeywords}%`]);
 		if (result.rows.length === 0) {
 			return res.status(404).json({ error: "No products found" });
 		}
-		return res.status(200).json({ products: result.rows });
-	} catch (err) {
-		console.error("Error in showProductController:", err);
-		return res.status(500).json({ error: "Internal Server Error" }, err);
-	}
+		res.status(200).json({ products: result.rows });
+	});
 };
 
 const stockAlertController = async (req, res) => {
