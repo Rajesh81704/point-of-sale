@@ -2,6 +2,7 @@ import { pool } from "../db/db.js";
 import { addStock, checkProductExists, updateStock } from "../utils/product.utils.js";
 import { getUserDtlsWithToken } from "../utils/util.js";
 import { addProduct } from "../utils/product.utils.js";
+import { redisClient } from "../db/redis.js";
 
 const addProductController = async (req, res) => {
 	const { barcode, name, price, quantity, productImage, category, brand } = req.body;
@@ -251,40 +252,110 @@ const finalizeSaleController = async (req, res) => {
 };
 
 const showProductController = async (req, res) => {
-	let productKeywords = req.body.productKeywords;
-	const user = await getUserDtlsWithToken(req.headers["authorization"]?.split(" ")[1]);
+	try {
+		if (!req.headers.authorization) {
+			return res.status(401).json({ error: "Missing Authorization header" });
+		}
 
-	if (!user) return res.status(401).json({ error: "Unauthorized" });
-	const userId = user.id;
-	const searchQuery = `
-	SELECT 
-		p.barcode, 
-		p.name, 
-		p.price, 
-		s.stock 
-	FROM products p 
-	INNER JOIN stocks s 
-		ON p.pk = s.product_id 
-	WHERE 
-		(COALESCE(p.name, '') ILIKE $1 
-		OR COALESCE(p.barcode, '') ILIKE $1 
-		OR COALESCE(p.description, '') ILIKE $1 
-		OR COALESCE(p.category, '') ILIKE $1 
-		OR COALESCE(p.brand, '') ILIKE $1)
-		AND p.user_id = $2
-	ORDER BY p.name ASC
-	`;
-	pool.query(searchQuery, [`%${productKeywords}%`, userId], (err, result) => {
-		if (err) {
-			console.error("Error searching products:", err);
-			return res.status(500).json({ error: "Internal server error" });
+		const tokenParts = req.headers.authorization.split(" ");
+		if (tokenParts.length !== 2 || tokenParts[0] !== "Bearer") {
+			return res.status(401).json({ error: "Invalid Authorization format" });
 		}
-		if (result.rows.length === 0) {
-			return res.status(404).json({ error: "No products found" });
+
+		const token = tokenParts[1];
+		if (!token) {
+			return res.status(401).json({ error: "Empty token" });
 		}
-		res.status(200).json({ products: result.rows });
-	});
+		let user;
+		try {
+			user = await getUserDtlsWithToken(token);
+		} catch (err) {
+			console.error("Error decoding token:", err);
+			return res.status(401).json({ error: "Invalid or expired token" });
+		}
+
+		if (!user || !user.id) {
+			return res.status(401).json({ error: "Unauthorized user" });
+		}
+
+		const userId = user.id;
+		const productKeywords = typeof req.body?.productKeywords === "string"
+			? req.body.productKeywords.trim()
+			: "";
+
+		const redisKey = productKeywords === ""
+			? `products:user:${userId}:all`
+			: `products:user:${userId}:search:${productKeywords}`;
+
+		try {
+			const cached = await redisClient.get(redisKey);
+			if (cached) {
+				return res.status(200).json({ products: JSON.parse(cached) });
+			}
+		} catch (err) {
+			console.error("Redis get error:", err);
+		}
+
+		let searchQuery;
+		let values;
+
+		if (productKeywords === "") {
+			searchQuery = `
+				SELECT 
+					p.pk AS id,
+					p.barcode, 
+					p.name, 
+					p.price, 
+					COALESCE(s.stock, 0) AS stock
+				FROM products p
+				LEFT JOIN stocks s ON p.pk = s.product_id
+				WHERE p.user_id = $1
+				ORDER BY p.name ASC
+			`;
+			values = [userId];
+		} else {
+			searchQuery = `
+				SELECT 
+					p.pk AS id,
+					p.barcode, 
+					p.name, 
+					p.price, 
+					COALESCE(s.stock, 0) AS stock
+				FROM products p
+				LEFT JOIN stocks s ON p.pk = s.product_id
+				WHERE p.user_id = $2
+				  AND (
+					p.name ILIKE $1 
+					OR p.barcode ILIKE $1 
+					OR p.description ILIKE $1 
+					OR p.category ILIKE $1 
+					OR p.brand ILIKE $1
+				  )
+				ORDER BY p.name ASC
+			`;
+			values = [`%${productKeywords}%`, userId];
+		}
+		let result;
+		try {
+			result = await pool.query(searchQuery, values);
+		} catch (err) {
+			console.error("Database query failed:", err.message);
+			return res.status(500).json({ error: "Database query failed" });
+		}
+		const products = result?.rows || [];
+		// Set result in Redis cache (expire in 60 seconds)
+		try {
+			await redisClient.set(redisKey, JSON.stringify(products), { EX: 60 });
+		} catch (err) {
+			console.error("Redis set error:", err);
+		}
+		return res.status(200).json({ products });
+	} catch (error) {
+		console.error("Unexpected error in showProductController:", error);
+		res.status(500).json({ error: "Internal server error" });
+	}
 };
+
 
 const stockAlertController = async (req, res) => {
 	const client = await pool.connect();

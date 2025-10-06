@@ -7,7 +7,7 @@ const { ACCESS_TOKEN_SECRET, REFRESH_TOKEN_SECRET } = process.env;
 const refreshTokens = new Map();
 
 function generateAccessToken(user) {
-	return jwt.sign({ id: user.id }, ACCESS_TOKEN_SECRET, { expiresIn: "1d" });
+	return jwt.sign({ id: user.id }, ACCESS_TOKEN_SECRET, { expiresIn: "60d" });
 }
 
 function generateRefreshToken(user) {

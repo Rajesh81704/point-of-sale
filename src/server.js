@@ -10,9 +10,6 @@ import cors from "cors";
 import bodyParser from "body-parser";
 import { productRouter } from "./routes/product.route.js";
 import cron from "node-cron";
-if (!process.env.URL) {
-	throw new Error("URL is not defined in environment variables");
-}
 
 app.use(bodyParser.json());
 app.use(express.json());
