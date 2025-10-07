@@ -283,6 +283,7 @@ const showProductController = async (req, res) => {
 			? req.body.productKeywords.trim()
 			: "";
 
+		// Redis cache key
 		const redisKey = productKeywords === ""
 			? `products:user:${userId}:all`
 			: `products:user:${userId}:search:${productKeywords}`;

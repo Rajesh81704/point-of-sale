@@ -1,10 +1,11 @@
 import { createClient } from 'redis';
-
+import dotenv from 'dotenv';
+dotenv.config();
 const client = createClient({
     username: 'default',
-    password: 'HSNm1cgEAnTZ7FAfUsPR3k4PgDz6eW1J',
+    password: process.env.REDIS_PASSWORD,
     socket: {
-        host: 'redis-15613.crce217.ap-south-1-1.ec2.redns.redis-cloud.com',
+        host: process.env.REDIS_HOST,
         port: process.env.REDIS_PORT || 15613
     }
 });
@@ -15,5 +16,5 @@ await client.connect();
 
 await client.set('foo', 'bar');
 const result = await client.get('foo');
-console.log("redis is connected",result); 
+console.log("redis is connected: ","//*"+result+"*//"); 
 export const redisClient = client;
