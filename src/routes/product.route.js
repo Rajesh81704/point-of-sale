@@ -30,3 +30,4 @@ productRouter.get("/stock-alert", protectedRoute, stockAlertController);
 productRouter.post("/sales-report", protectedRoute, salesReportController);
 
 export { productRouter };
+
