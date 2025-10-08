@@ -23,7 +23,7 @@ productRouter.post("/proceed-cart", protectedRoute, proceedCartController);
 
 productRouter.post("/finalize-sale", protectedRoute, finalizeSaleController);
 
-productRouter.post("/show-product", protectedRoute, showProductController);
+productRouter.get("/show-product/:searchKey", protectedRoute, showProductController);
 
 productRouter.get("/stock-alert", protectedRoute, stockAlertController);
 

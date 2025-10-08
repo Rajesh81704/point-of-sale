@@ -251,112 +251,55 @@ const finalizeSaleController = async (req, res) => {
 	}
 };
 
+
 const showProductController = async (req, res) => {
+	const {searchKey} = req.params
+	const client = await pool.connect();
 	try {
-		if (!req.headers.authorization) {
-			return res.status(401).json({ error: "Missing Authorization header" });
-		}
-
-		const tokenParts = req.headers.authorization.split(" ");
-		if (tokenParts.length !== 2 || tokenParts[0] !== "Bearer") {
-			return res.status(401).json({ error: "Invalid Authorization format" });
-		}
-
-		const token = tokenParts[1];
-		if (!token) {
-			return res.status(401).json({ error: "Empty token" });
-		}
-		let user;
-		try {
-			user = await getUserDtlsWithToken(token);
-		} catch (err) {
-			console.error("Error decoding token:", err);
-			return res.status(401).json({ error: "Invalid or expired token" });
-		}
-
-		if (!user || !user.id) {
-			return res.status(401).json({ error: "Unauthorized user" });
-		}
-
+		client.query("BEGIN");
+		const user = await getUserDtlsWithToken(req.headers["authorization"]?.split(" ")[1]);
+		if (!user) {
+			return res.status(401).json({ error: "Unauthorized" });
+		}	
 		const userId = user.id;
-		const productKeywords = typeof req.body?.productKeywords === "string"
-			? req.body.productKeywords.trim()
-			: "";
-
-		// Redis cache key
-		const redisKey = productKeywords === ""
-			? `products:user:${userId}:all`
-			: `products:user:${userId}:search:${productKeywords}`;
-
-		try {
-			const cached = await redisClient.get(redisKey);
-			if (cached) {
-				return res.status(200).json({ products: JSON.parse(cached) });
-			}
-		} catch (err) {
-			console.error("Redis get error:", err);
+		if (!searchKey || searchKey.trim() === "") {
+			return res.status(400).json({ error: "Search key is required" });
 		}
 
-		let searchQuery;
-		let values;
-
-		if (productKeywords === "") {
-			searchQuery = `
-				SELECT 
-					p.pk AS id,
-					p.barcode, 
-					p.name, 
-					p.price, 
-					COALESCE(s.stock, 0) AS stock
-				FROM products p
-				LEFT JOIN stocks s ON p.pk = s.product_id
-				WHERE p.user_id = $1
-				ORDER BY p.name ASC
-			`;
-			values = [userId];
-		} else {
-			searchQuery = `
-				SELECT 
-					p.pk AS id,
-					p.barcode, 
-					p.name, 
-					p.price, 
-					COALESCE(s.stock, 0) AS stock
-				FROM products p
-				LEFT JOIN stocks s ON p.pk = s.product_id
-				WHERE p.user_id = $2
-				  AND (
-					p.name ILIKE $1 
-					OR p.barcode ILIKE $1 
-					OR p.description ILIKE $1 
-					OR p.category ILIKE $1 
-					OR p.brand ILIKE $1
-				  )
-				ORDER BY p.name ASC
-			`;
-			values = [`%${productKeywords}%`, userId];
-		}
 		let result;
-		try {
-			result = await pool.query(searchQuery, values);
-		} catch (err) {
-			console.error("Database query failed:", err.message);
-			return res.status(500).json({ error: "Database query failed" });
-		}
-		const products = result?.rows || [];
-		// Set result in Redis cache (expire in 60 seconds)
-		try {
-			await redisClient.set(redisKey, JSON.stringify(products), { EX: 60 });
-		} catch (err) {
-			console.error("Redis set error:", err);
-		}
-		return res.status(200).json({ products });
-	} catch (error) {
-		console.error("Unexpected error in showProductController:", error);
-		res.status(500).json({ error: "Internal server error" });
-	}
-};
+		if (searchKey==='*') {
+			const allProductsQuery = `
+			SELECT p.barcode, p.name, p.price, s.stock
+			FROM products p
+			INNER JOIN stocks s ON p.pk = s.product_id
+			INNER JOIN users u ON u.pk = p.user_id
+			WHERE u.pk = $1
+			ORDER BY p.created_dt DESC
+			`
+			result = await client.query(allProductsQuery, [userId]);
+			client.query("COMMIT");
+			return res.status(200).json({ products: result.rows });
+		}	
 
+		const searchQuery = `
+			SELECT p.barcode, p.name, p.price, s.stock
+			FROM products p
+			INNER JOIN stocks s ON p.pk = s.product_id
+			INNER JOIN users u ON u.pk = p.user_id	
+			WHERE u.pk = $1 AND (p.name ILIKE $2 OR p.barcode ILIKE $2)
+			ORDER BY p.created_dt DESC
+			`
+		result = await client.query(searchQuery, [userId, `%${searchKey}%`]);
+		client.query("COMMIT");
+		return res.status(200).json({ products: result.rows });
+	} catch (err) {
+		console.error("Error fetching products:", err);
+		client.query("ROLLBACK");
+		return res.status(500).json({ error: "Internal server error" });
+	} finally {
+		client.release();
+	}	
+}
 
 const stockAlertController = async (req, res) => {
 	const client = await pool.connect();
@@ -540,3 +483,6 @@ export {
 	salesReportController,
 	periodicSalesReport,
 };
+
+
+
