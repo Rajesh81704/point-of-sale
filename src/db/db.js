@@ -7,7 +7,7 @@ if (!process.env.DATABASE_URL) {
 }
 
 const pool = new Pool({
-    user: process.env.DATABASE_USER || "avnadmin",
+    user: process.env.DATABASE_USER,
     password: process.env.DATABASE_PASSWORD,
     host: process.env.DATABASE_HOST,
     port: process.env.DATABASE_PORT,
