@@ -7,11 +7,11 @@ if (!process.env.DATABASE_URL) {
 }
 
 const pool = new Pool({
-    user: "avnadmin",
-    password: "AVNS_JxZtd645tMrK-dx4rQ9",
-    host: "pg-5ad66d4-rajeshsarkar81704-fafa.l.aivencloud.com",
-    port: 13498,
-    database: "defaultdb",
+    user: process.env.DB_USER || "avnadmin",
+    password: process.env.DB_PASSWORD,
+    host: process.env.DB_HOST,
+    port: process.env.DB_PORT,
+    database: process.env.DB_NAME,
     ssl: {
         rejectUnauthorized: true,
         ca: `-----BEGIN CERTIFICATE-----
