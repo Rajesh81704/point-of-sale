@@ -2,7 +2,7 @@ import { pool } from "../db/db.js";
 import { addStock, checkProductExists, updateStock } from "../utils/product.utils.js";
 import { getUserDtlsWithToken } from "../utils/util.js";
 import { addProduct } from "../utils/product.utils.js";
-import { redisClient } from "../db/redis.js";
+// import { redisClient } from "../db/redis.js";
 
 const addProductController = async (req, res) => {
 	const { barcode, name, price, quantity, productImage, category, brand } = req.body;
@@ -269,7 +269,7 @@ const showProductController = async (req, res) => {
 		let result;
 		if (searchKey==='*') {
 			const allProductsQuery = `
-			SELECT p.barcode, p.name, p.price, s.stock
+			SELECT p.barcode, p.name, p.price, p.description, s.stock
 			FROM products p
 			INNER JOIN stocks s ON p.pk = s.product_id
 			INNER JOIN users u ON u.pk = p.user_id
@@ -282,7 +282,7 @@ const showProductController = async (req, res) => {
 		}	
 
 		const searchQuery = `
-			SELECT p.barcode, p.name, p.price, s.stock
+			SELECT p.barcode, p.name, p.price, p.description, s.stock
 			FROM products p
 			INNER JOIN stocks s ON p.pk = s.product_id
 			INNER JOIN users u ON u.pk = p.user_id	
