@@ -12,8 +12,8 @@ const pool = new Pool({
     host: process.env.DATABASE_HOST,
     port: process.env.DATABASE_PORT,
     database: process.env.DATABASE_NAME,
-    ssl: { rejectUnauthorized: false,
-		ca: undefined
+    ssl: { rejectUnauthorized: true,
+		ca: Buffer.from(process.env.DB_CA_BASE64, 'base64').toString('utf-8') 
 	 },
 });
 
