@@ -23,5 +23,17 @@ const authenticateRefreshToken = (req, res, next) => {
 		next();
 	});
 };
+const requestTimeout = (ms = 10000) => {
+  return (req, res, next) => {
+    const timer = setTimeout(() => {
+      if (!res.headersSent) {
+        console.warn(`⚠️ Request to ${req.originalUrl} timed out after ${ms}ms`);
+        res.status(504).json({ error: "Request timed out" });
+      }
+    }, ms);
 
-export { authenticateAccessToken, authenticateRefreshToken };
+    res.on("finish", () => clearTimeout(timer)); // cleanup
+    next();
+  };
+};
+export { authenticateAccessToken, authenticateRefreshToken, requestTimeout };
