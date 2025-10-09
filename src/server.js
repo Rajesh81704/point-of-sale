@@ -1,5 +1,6 @@
 import express from "express";
 import { authRouter } from "./routes/auth.route.js";
+import { requestTimeout } from "./middleware/middleware.js";
 const app = express();
 const PORT = process.env.PORT;
 if (!PORT) {
@@ -23,6 +24,9 @@ app.use(morgan("tiny"));
 app.use(bodyParser.json());
 app.use(express.json());
 app.use(cors());
+
+app.use(requestTimeout(10000));
+
 
 app.use(express.json());
 // routes for authentication
