@@ -281,8 +281,16 @@ const showProductController = async (req, res) => {
 		]);
 
 	try {
+		const returnObj={
+			products: [],
+			cached: false
+		}
 		const cached = await redisClient.get(cacheKey);
-		if (cached) return res.status(200).json(JSON.parse(cached));
+		if (cached){
+			returnObj.cached=true
+			returnObj.products=JSON.parse(cached).products
+			return res.status(200).json(returnObj);
+		} 
 		client = await pool.connect();
 		const user = await getUserDtlsWithToken(token);
 		if (!user) {
@@ -316,7 +324,11 @@ const showProductController = async (req, res) => {
 		}
 		const result = await queryWithTimeout(client.query(query, params), timeoutMs);
 		await redisClient.setEx(cacheKey, 30, JSON.stringify({ products: result.rows }));
-		return res.status(200).json({ products: result.rows });
+		if(!cached) {
+			returnObj.cached=false
+			returnObj.products=result.rows
+		}
+		return res.status(200).json(returnObj);
 	} catch (err) {
 		console.error("Error fetching products:", err.message);
 		console.error(err.stack || err);
