@@ -15,6 +15,10 @@ const pool = new Pool({
     ssl: { rejectUnauthorized: true,
 		ca: Buffer.from(process.env.DB_CA_BASE64, 'base64').toString('utf-8') 
 	 },
+	allowExitOnIdle: true,
+	max: 20,          // enough for concurrency
+	idleTimeoutMillis: 10000, // kill idle clients
+	connectionTimeoutMillis: 5000, // fail fast
 });
 
 pool.connect((err, client, release) => {

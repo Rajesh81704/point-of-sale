@@ -11,6 +11,15 @@ import bodyParser from "body-parser";
 import { productRouter } from "./routes/product.route.js";
 import cron from "node-cron";
 
+import compression from "compression";
+import helmet from "helmet";
+import morgan from "morgan";
+
+app.use(helmet());          
+app.use(compression());    
+app.use(express.json());
+app.use(morgan("tiny"));   
+
 app.use(bodyParser.json());
 app.use(express.json());
 app.use(cors());

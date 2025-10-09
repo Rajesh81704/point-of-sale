@@ -2,8 +2,16 @@ import { pool } from "../db/db.js";
 import { addStock, checkProductExists, updateStock } from "../utils/product.utils.js";
 import { getUserDtlsWithToken } from "../utils/util.js";
 import { addProduct } from "../utils/product.utils.js";
-// import { redisClient } from "../db/redis.js";
+import { redisClient } from "../db/redis.js";
 
+function withTimeout(promise, ms, label) {
+  return Promise.race([
+    promise,
+    new Promise((_, reject) =>
+      setTimeout(() => reject(new Error(`${label} timed out after ${ms}ms`)), ms)
+    ),
+  ]);
+}
 const addProductController = async (req, res) => {
 	const { barcode, name, price, quantity, productImage, category, brand } = req.body;
 
@@ -14,14 +22,12 @@ const addProductController = async (req, res) => {
 	const client = await pool.connect();
 	try {
 		await client.query("BEGIN");
-		// Check if product already exists
 		if (await checkProductExists(client, barcode)) {
 			const stock = await updateStock(client, barcode, quantity);
 			if (!stock) throw new Error("Failed to update stock");
 			await client.query("COMMIT");
 			return res.status(200).json({ message: "Stock updated", stock });
 		}
-		// Otherwise add new product
 		const user = await getUserDtlsWithToken(req.headers["authorization"]?.split(" ")[1]);
 		const userId = user.id;
 		const productResult = await addProduct(
@@ -252,54 +258,73 @@ const finalizeSaleController = async (req, res) => {
 };
 
 
+
+
 const showProductController = async (req, res) => {
-	const {searchKey} = req.params
-	const client = await pool.connect();
+	const { searchKey } = req.params;
+	const authHeader = req.headers["authorization"];
+
+	if (!authHeader) return res.status(401).json({ error: "Unauthorized" });
+
+	const token = authHeader.split(" ")[1];
+	const cacheKey = `products:${token}:${searchKey || "*"}`;
+
+	let client;
+	const timeoutMs = 8000; 
+
+	const queryWithTimeout = (promise, ms) =>
+		Promise.race([
+			promise,
+			new Promise((_, reject) =>
+				setTimeout(() => reject(new Error("Query timeout")), ms)
+			),
+		]);
+
 	try {
-		client.query("BEGIN");
-		const user = await getUserDtlsWithToken(req.headers["authorization"]?.split(" ")[1]);
+		const cached = await redisClient.get(cacheKey);
+		if (cached) return res.status(200).json(JSON.parse(cached));
+		client = await pool.connect();
+		const user = await getUserDtlsWithToken(token);
 		if (!user) {
+			client.release();
 			return res.status(401).json({ error: "Unauthorized" });
-		}	
+		}
 		const userId = user.id;
 		if (!searchKey || searchKey.trim() === "") {
+			client.release();
 			return res.status(400).json({ error: "Search key is required" });
 		}
-
-		let result;
-		if (searchKey==='*') {
-			const allProductsQuery = `
-			SELECT p.barcode, p.name, p.price, p.description, s.stock
-			FROM products p
-			INNER JOIN stocks s ON p.pk = s.product_id
-			INNER JOIN users u ON u.pk = p.user_id
-			WHERE u.pk = $1
-			ORDER BY p.created_dt DESC
-			`
-			result = await client.query(allProductsQuery, [userId]);
-			client.query("COMMIT");
-			return res.status(200).json({ products: result.rows });
-		}	
-
-		const searchQuery = `
-			SELECT p.barcode, p.name, p.price, p.description, s.stock
-			FROM products p
-			INNER JOIN stocks s ON p.pk = s.product_id
-			INNER JOIN users u ON u.pk = p.user_id	
-			WHERE u.pk = $1 AND (p.name ILIKE $2 OR p.barcode ILIKE $2)
-			ORDER BY p.created_dt DESC
-			`
-		result = await client.query(searchQuery, [userId, `%${searchKey}%`]);
-		client.query("COMMIT");
+		let query, params;
+		if (searchKey === "*") {
+			query = `
+				SELECT p.barcode, p.name, p.price, p.description, s.stock
+				FROM products p
+				JOIN stocks s ON p.pk = s.product_id
+				WHERE p.user_id = $1
+				ORDER BY p.created_dt DESC
+			`;
+			params = [userId];
+		} else {
+			query = `
+				SELECT p.barcode, p.name, p.price, p.description, s.stock
+				FROM products p
+				JOIN stocks s ON p.pk = s.product_id
+				WHERE p.user_id = $1 AND (p.name ILIKE $2 OR p.barcode ILIKE $2)
+				ORDER BY p.created_dt DESC
+			`;
+			params = [userId, `%${searchKey}%`];
+		}
+		const result = await queryWithTimeout(client.query(query, params), timeoutMs);
+		await redisClient.setEx(cacheKey, 30, JSON.stringify({ products: result.rows }));
 		return res.status(200).json({ products: result.rows });
 	} catch (err) {
-		console.error("Error fetching products:", err);
-		client.query("ROLLBACK");
+		console.error("Error fetching products:", err.message);
+		console.error(err.stack || err);
 		return res.status(500).json({ error: "Internal server error" });
 	} finally {
-		client.release();
-	}	
-}
+		if (client) client.release(); 
+	}
+};
 
 const stockAlertController = async (req, res) => {
 	const client = await pool.connect();
