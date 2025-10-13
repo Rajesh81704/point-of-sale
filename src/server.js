@@ -31,18 +31,18 @@ app.use(requestTimeout(10000));
 // routes for authentication
 app.use("/auth", authRouter);
 
-app.get("/", (req, res) => {
-	res.send("Welcome to the ERP+POS system");
-});
+// app.get("/", (req, res) => {
+// 	res.send("Welcome to the ERP+POS system");
+// });
 
-cron.schedule("*/13 * * * *", async () => {
-	try {
-		const response = await fetch(process.env.URL);
-		console.log("Cron job executed. Response:", await response.text());
-	} catch (error) {
-		console.error("Error during cron job execution:", error);
-	}
-});
+// cron.schedule("*/13 * * * *", async () => {
+// 	try {
+// 		const response = await fetch(process.env.URL);
+// 		console.log("Cron job executed. Response:", await response.text());
+// 	} catch (error) {
+// 		console.error("Error during cron job execution:", error);
+// 	}
+// });
 // routes for products
 
 app.use("/product", productRouter);

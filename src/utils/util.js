@@ -35,6 +35,8 @@ const getUserDtlsWithToken = async (token) => {
 		console.error("Error fetching user details:", err);
 		client.query("ROLLBACK");
 		return null;
+	}finally {
+		client.release();
 	}
 };
 

@@ -1,5 +1,5 @@
-const checkProductExists = async (client, barcode) => {
-	const result = await client.query("SELECT COUNT(*) FROM products WHERE barcode = $1", [barcode]);
+const checkProductExists = async (client, barcode, userId) => {
+	const result = await client.query("SELECT COUNT(*) FROM products WHERE barcode = $1 AND user_id = $2", [barcode, userId]);
 	return parseInt(result.rows[0].count) > 0;
 };
 const addProduct = async (
@@ -41,37 +41,37 @@ const addStock = async (client, productId, quantity) => {
 	return result.rows[0];
 };
 
-export const addStockOfNonQuantizedItem = async (client, barcode, quantity) => {
-	const getProductIdQuery = "SELECT pk FROM products WHERE barcode = $1";
-	const productResult = await client.query(getProductIdQuery, [barcode]);
-	if (productResult.rows.length === 0) {
-		throw new Error("Product not found");
-	}
-	const obj={
-		weigth:0,
-		pricePerWeigth:0,
-	}
-	const productId = productResult.rows[0].pk;
-	const query=`insert into stocks (product_id, add_dtls, created_dt) values ($1,$2,NOW()) returning *`
-	const result = await client.query(query, [productId, obj]);
-	return result.rows[0];
-}
+const addStockOfNonQuantizedItem = async (client, add_dtls, productId) => {
+  const query = `
+    INSERT INTO stocks (product_id, add_dtls, created_dt)
+    VALUES ($1, $2::jsonb, NOW())
+    RETURNING *;
+  `;
+const result = await client.query(query, [productId, JSON.stringify(add_dtls)]);
+  return result.rows[0];
+};
 
-export const updateStockOfNonQuantizedItem = async (client, barcode, add_dtls) => {
-	const getProductIdQuery = "SELECT pk FROM products WHERE barcode = $1";
-	const productResult = await client.query(getProductIdQuery, [barcode]);
-	if (productResult.rows.length === 0) {
-		throw new Error("Product not found");
-	}
-	const productId = productResult.rows[0].pk;
-	const query = `update stocks set add_dtls ->> 'weight' = $1, add_dtls ->> 'pricePerWeight' = $2 where product_id = $3 returning *`;
+export const updateStockOfNonQuantizedItem = async (client, productId, add_dtls) => {
+	const query = `
+		UPDATE stocks 
+		SET add_dtls = jsonb_set(
+			jsonb_set(add_dtls, '{weight}', to_jsonb($1::numeric)),
+			'{pricePerWeight}', to_jsonb($2::numeric)
+		) 
+		WHERE product_id = $3 
+		RETURNING *;
+	`;
 	const result = await client.query(query, [add_dtls.weight, add_dtls.pricePerWeight, productId]);
+	if (result.rows.length === 0) {
+		throw new Error("Product not found");
+	}
 	return result.rows[0];
-}
+};
 
-const updateStock = async (client, barcode, quantity) => {
-	const getProductIdQuery = "SELECT pk FROM products WHERE barcode = $1";
-	const productResult = await client.query(getProductIdQuery, [barcode]);
+
+const updateStock = async (client, barcode, quantity, userId) => {
+	const getProductIdQuery = "SELECT pk FROM products WHERE barcode = $1 AND user_id = $2";
+	const productResult = await client.query(getProductIdQuery, [barcode, userId]);
 	console.log("productResult", productResult.rows[0].pk);
 	if (productResult.rows.length === 0) {
 		throw new Error("Product not found");
@@ -87,4 +87,7 @@ const updateStock = async (client, barcode, quantity) => {
 	return result.rows[0];
 };
 
-export { checkProductExists, addStock, updateStock, addProduct };
+export { checkProductExists, addStock, updateStock, addProduct, addStockOfNonQuantizedItem };
+
+
+

@@ -7,18 +7,15 @@ import "dotenv/config";
 // }
 
 const pool = new Pool({
-    user: process.env.DATABASE_USER,
-    password: process.env.DATABASE_PASSWORD,
-    host: process.env.DATABASE_HOST,
-    port: process.env.DATABASE_PORT,
-    database: process.env.DATABASE_NAME,
-    ssl: { rejectUnauthorized: true,
-		ca: Buffer.from(process.env.DB_CA_BASE64, 'base64').toString('utf-8') 
-	 },
-	allowExitOnIdle: true,
-	max: 20,          // enough for concurrency
-	idleTimeoutMillis: 10000, // kill idle clients
-	connectionTimeoutMillis: 5000, // fail fast
+	user: process.env.DATABASE_USER,
+	password: process.env.DATABASE_PASSWORD,
+	host: process.env.DATABASE_HOST,
+	port: process.env.DATABASE_PORT,
+	database: process.env.DATABASE_NAME,
+	ssl: {
+		rejectUnauthorized: true,
+		ca: Buffer.from(process.env.DB_CA_BASE64 || '', 'base64').toString('utf-8')
+	},
 });
 
 // const pool = new Pool({
