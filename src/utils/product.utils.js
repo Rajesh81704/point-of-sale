@@ -43,11 +43,16 @@ const addStock = async (client, productId, quantity) => {
 
 const addStockOfNonQuantizedItem = async (client, add_dtls, productId) => {
   const query = `
-    INSERT INTO stocks (product_id, add_dtls, created_dt)
-    VALUES ($1, $2::jsonb, NOW())
+    INSERT INTO stocks (product_id, add_dtls, stock, last_stock, created_dt)
+    VALUES ($1, $2::jsonb, $3, $4, NOW())
     RETURNING *;
   `;
-const result = await client.query(query, [productId, JSON.stringify(add_dtls)]);
+  const obj={
+	weight: add_dtls.weight,
+	pricePerWeight: add_dtls.pricePerWeight,
+	last_weight: add_dtls.weight,
+  };
+  const result = await client.query(query, [productId, JSON.stringify(obj), add_dtls.weight, add_dtls.weight]);
   return result.rows[0];
 };
 
@@ -55,7 +60,7 @@ export const updateStockOfNonQuantizedItem = async (client, productId, add_dtls)
 	const query = `
 		UPDATE stocks 
 		SET add_dtls = jsonb_set(
-			jsonb_set(add_dtls, '{weight}', to_jsonb($1::numeric)),
+			jsonb_set(add_dtls, '{last_weight}', to_jsonb($1::numeric)),
 			'{pricePerWeight}', to_jsonb($2::numeric)
 		) 
 		WHERE product_id = $3 

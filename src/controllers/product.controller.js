@@ -9,13 +9,12 @@ const addProductController = async (req, res) => {
 	let barcodeTrimmed = barcode ? barcode.trim() : "n/a";
 	if (quantity <= 0 || price <= 0) return res.status(400).json({ error: "Price and quantity must be greater than zero" });
 	const isQuantizedItem = req.body.isQuantizedItem || false;
-    if(barcodeTrimmed==="n/a") barcodeTrimmed = isQuantizedItem===false ? 'N/A-' + Date.now() : 'Q-' + Date.now();
+    if(barcodeTrimmed==="n/a"||barcodeTrimmed.isEmpty()) barcodeTrimmed = isQuantizedItem===false ? 'N/A-' + Date.now() : 'Q-' + Date.now();
 	const client = await pool.connect();
 	try {
 		await client.query("BEGIN");
 		const user = await getUserDtlsWithToken(req.headers["authorization"]?.split(" ")[1]);
 		const userId = user.id;
-
 		if(isQuantizedItem===false && barcodeTrimmed.includes("N/A-")){
 			console.log(barcodeTrimmed, name, price, quantity, productImage, category, brand, add_dtls, userId)
 			const result = await addWithOutBarcode(client, barcodeTrimmed, name, price, quantity, productImage, category, brand, add_dtls, userId)
@@ -46,173 +45,195 @@ const addProductController = async (req, res) => {
 };
 
 const addWithOutBarcode = async ( client, barcode, name, price, quantity, productImage, category, brand, add_dtls, userId ) => {
-	console.log("addWithOutBarcode called");
-  if (quantity <= 0 || price <= 0) throw new Error("Price and quantity must be greater than zero");
-  try {
-    await client.query("BEGIN");
-    const checkIsExistsQuery = `SELECT COUNT(*) FROM products p WHERE p.name=$1 AND p.user_id=$2`
-    const isExistsResult = await client.query(checkIsExistsQuery, [name, userId]);
+	if (quantity <= 0 || price <= 0) throw new Error("Price and quantity must be greater than zero");
+	try {
+		await client.query("BEGIN");
+		const checkIsExistsQuery = `SELECT COUNT(*) FROM products p WHERE p.name=$1 AND p.user_id=$2`
+		const isExistsResult = await client.query(checkIsExistsQuery, [name, userId]);
 
-    if (parseInt(isExistsResult.rows[0].count) > 0) {
-      const getBarcodeQuery = `SELECT p.barcode FROM products p WHERE p.name=$1 AND p.user_id=$2`
-      const barcodeResult = await client.query(getBarcodeQuery, [name, userId]);
-	  const barcode = barcodeResult.rows[0].barcode;
-	  if (!barcode) throw new Error("Barcode not found for existing product");
-	  console.log("Product already exists with barcode:", barcode);
+		if (parseInt(isExistsResult.rows[0].count) > 0) {
+		const getBarcodeQuery = `SELECT p.barcode FROM products p WHERE p.name=$1 AND p.user_id=$2`
+		const barcodeResult = await client.query(getBarcodeQuery, [name, userId]);
+		const barcode = barcodeResult.rows[0].barcode;
+		if (!barcode) throw new Error("Barcode not found for existing product");
 
-	  const getProductIdQuery = "SELECT pk FROM products WHERE barcode = $1 AND user_id=$2";
-	  const productResult = await client.query(getProductIdQuery, [barcode, userId]);
-	  if (productResult.rows.length === 0) throw new Error("Product not found");
-	  const productId = productResult.rows[0].pk;
-	  console.log("productId", productId);
+		const getProductIdQuery = "SELECT pk FROM products WHERE barcode = $1 AND user_id=$2";
+		const productResult = await client.query(getProductIdQuery, [barcode, userId]);
+		if (productResult.rows.length === 0) throw new Error("Product not found");
+		const productId = productResult.rows[0].pk;
 
-      const stock = await updateStockOfNonQuantizedItem( client, productId, add_dtls );
-      if (!stock) throw new Error("Failed to update stock for non-quantized item");
-      await client.query("COMMIT");
-      return { message: "Stock updated for non-quantized item", stock };
-    }
+		const stock = await updateStockOfNonQuantizedItem( client, productId, add_dtls );
+		if (!stock) throw new Error("Failed to update stock for non-quantized item");
+		await client.query("COMMIT");
+		return { message: "Stock updated for non-quantized item", stock };
+    	}
+		const productResult = await addProduct( client, barcode, name, price, name, userId, productImage, category, brand );
+		if (!productResult) throw new Error("Failed to add product");
+		console.log("New product added with barcode:", productResult.barcode);
+		const stock = await addStockOfNonQuantizedItem(client, add_dtls, productResult.pk);
 
-	const productResult = await addProduct( client, barcode, name, price, name, userId, productImage, category, brand );
-	if (!productResult) throw new Error("Failed to add product");
-	console.log("New product added with barcode:", productResult.barcode);
-	const stock = await addStockOfNonQuantizedItem(client, add_dtls, productResult.pk);
-	console.log("Stock added for non-quantized item:", stock);
+		await client.query("COMMIT");
+		return { message: "New product added", product: productResult, stock };
 
-    // if (!stock) throw new Error("Failed to add stock for non-quantized item");
-    await client.query("COMMIT");
-    return { message: "New product added", product: productResult, stock };
-
-  } catch (error) {
-    await client.query("ROLLBACK");
-    console.error("Error in addWithOutBarcode:", error);
-    throw error;
-  } finally {
-    client.release();
-  }
-};
-
+	} 
+	catch (error) {
+		await client.query("ROLLBACK");
+		console.error("Error in addWithOutBarcode:", error);
+		throw error;
+	} finally {
+		client.release();
+	}
+}
 
 const checkoutProductController = async (req, res) => {
-	const { barcode } = req.body;
-	if (!barcode) {
-		return res.status(400).json({ error: "Barcode is required" });
-	}
-	const client = await pool.connect();
-	client.query("BEGIN");
-	const user = await getUserDtlsWithToken(req.headers["authorization"]?.split(" ")[1]);
-	if (!user) {
-		await client.query("ROLLBACK");
-		return res.status(401).json({ error: "Unauthorized" });
-	}
-	const userId = user.id;
-	const checkProductId =
-		"select p.pk from products p inner join users u on u.pk=p.user_id where user_id=$1 and p.barcode=$2";
-	const productIdResult = await client.query(checkProductId, [userId, barcode]);
-	if (productIdResult.rows.length === 0) {
-		return res.status(404).json({ error: "Product not found" });
-	}
-	1;
-	const productId = productIdResult.rows[0].pk;
-	console.log("productId", productId);``
-	const checkStock = "select stock from stocks where product_id=$1";
-	const stockResult = await client.query(checkStock, [productId]);
-	if (stockResult.rows.length === 0 || stockResult.rows[0].stock <= 0) {
-		return res.status(404).json({ error: "Product not found or out of stock" });
-	}
-	const updateStockQuery = "update stocks set stock=stock-1 where product_id=$1 returning *";
-	const result = await client.query(updateStockQuery, [productId]);
-	client.query("COMMIT");
-	if (result.rows.length === 0) {
-		return res.status(400).json({ error: "Failed to add item to cart" });
-	}
-	client.release();
-	return res.status(200).json({ message: "Item added to cart", stock: result.rows[0] });
-};
+		const { barcode } = req.body;
+		if (!barcode) return res.status(400).json({ error: "Barcode is required" })
+		const client = await pool.connect();
+		client.query("BEGIN");
+		const user = await getUserDtlsWithToken(req.headers["authorization"]?.split(" ")[1]);
+		if (!user) {
+			await client.query("ROLLBACK");
+			return res.status(401).json({ error: "Unauthorized" });
+		}
+		const userId = user.id;
+		const checkProductId =
+			"select p.pk from products p inner join users u on u.pk=p.user_id where user_id=$1 and p.barcode=$2";
+		const productIdResult = await client.query(checkProductId, [userId, barcode]);
+		if (productIdResult.rows.length === 0) 
+			return res.status(404).json({ error: "Product not found" })
 
-const removeItemController = async (req, res) => {
-	const { barcode } = req.body;
-	if (!barcode) {
-		return res.status(400).json({ error: "Barcode is required" });
-	}
-	const client = await pool.connect();
-	const checkProductId = "select pk from products where barcode=$1";
-	const productIdResult = await client.query(checkProductId, [barcode]);
-	if (productIdResult.rows.length === 0) {
-		return res.status(404).json({ error: "Product not found" });
-	}
-	const productId = productIdResult.rows[0].pk;
-	const checkStock = "select stock from stocks where product_id=$1";
-	const stockResult = await pool.query(checkStock, [productId]);
-	if (stockResult.rows.length === 0 || stockResult.rows[0].stock <= 0) {
-		return res.status(404).json({ error: "Product not found or out of stock" });
-	}
-	const removeStockQuery = "update stocks set stock=stock+1 where product_id=$1 returning *";
-	const result = await client.query(removeStockQuery, [productId]);
-	if (result.rows.length === 0) {
-		return res.status(400).json({ error: "Failed to remove item from cart" });
-	}
-	return res.status(200).json({ message: "Item removed from cart" });
+		const productId = productIdResult.rows[0].pk;
+		console.log("productId", productId);
+		const checkStock = "select stock from stocks where product_id=$1";
+		const stockResult = await client.query(checkStock, [productId]);
+		if (stockResult.rows.length === 0 || stockResult.rows[0].stock <= 0)
+			return res.status(404).json({ error: "Product not found or out of stock" });
+
+		const updateStockQuery = "update stocks set stock=stock-1 where product_id=$1 returning *";
+		if(barcode.startsWith("N/A-")){
+			const updateStockQuery = "update stocks set stock=stock-1, add_dtls=jsonb_set(add_dtls, '{weight}', to_jsonb((add_dtls->>'weight')::numeric - $2::numeric)) where product_id=$1 returning *";
+			const result = await client.query(updateStockQuery, [productId, req.body.weight]);
+			client.query("COMMIT");
+			if (result.rows.length === 0)
+				return res.status(400).json({ error: "Failed to add item to cart" });
+			client.release();
+			return res.status(200).json({ message: "Item added to cart", stock: result.rows[0] });
+		}
+
+		const result = await client.query(updateStockQuery, [productId]);
+		client.query("COMMIT");
+		if (result.rows.length === 0) 
+			return res.status(400).json({ error: "Failed to add item to cart" });
+		client.release();
+		return res.status(200).json({ message: "Item added to cart", stock: result.rows[0] });
 };
+ 
+const removeItemController = async (req, res) => {
+		const { barcode } = req.body;
+		if (!barcode) {
+			return res.status(400).json({ error: "Barcode is required" });
+		}
+		const client = await pool.connect();
+		const checkProductId = "select pk from products where barcode=$1";
+		const productIdResult = await client.query(checkProductId, [barcode]);
+		if (productIdResult.rows.length === 0) {
+			return res.status(404).json({ error: "Product not found" });
+		}
+		const productId = productIdResult.rows[0].pk;
+		const checkStock = "select stock from stocks where product_id=$1";
+		const stockResult = await pool.query(checkStock, [productId]);
+		if (stockResult.rows.length === 0 || stockResult.rows[0].stock <= 0) 
+			return res.status(404).json({ error: "Product not found or out of stock" });
+		
+		if(barcode.startsWith("N/A-")){
+			const query="update stocks set stock=stock+$1, add_dtls=jsonb_set(add_dtls, '{weight}', to_jsonb((add_dtls->>'weight')::numeric + $1::numeric)) where product_id=$2 returning *"
+			const result = await client.query(query, [req.body.weight, productId]);
+			if (result.rows.length === 0)
+				return res.status(400).json({ error: "Failed to remove item from cart" });
+			return res.status(200).json({ message: "Item removed from cart", stock: result.rows[0] });
+		}
+
+		const removeStockQuery = "update stocks set stock=stock+1 where product_id=$1 returning *";
+		const result = await client.query(removeStockQuery, [productId]);
+		if (result.rows.length === 0) 
+			return res.status(400).json({ error: "Failed to remove item from cart" });
+		
+		return res.status(200).json({ message: "Item removed from cart" });
+}
 
 const proceedCartController = async (req, res) => {
-	const { barcodes } = req.body;
-	let cartItemList = [];
-	let totalAmount = 0;
-	let client = await pool.connect();
+		const { barcodes } = req.body;
+		let cartItemList = [];
+		let totalAmount = 0;
+		let client = await pool.connect();
 
-	if (!barcodes || barcodes.length === 0) {
-		return res.status(400).json({ error: "Cart is empty" });
-	}
-	for (let i = 0; i < barcodes.length; i++) {
-		const getProduct = `
-            SELECT p.barcode, p.name, p.description AS desc, p.price 
-            FROM products p 
-            WHERE p.barcode = $1
-        `;
-
-		try {
-			client.query("BEGIN");
-			const productResult = await client.query(getProduct, [barcodes[i]]);
-			if (productResult.rows.length === 0) {
-				return res.status(404).json({
-					error: `Product with barcode ${cartList[i]} not found in cart`,
-				});
-			}
-			const product = productResult.rows[0];
-			totalAmount += parseFloat(product.price);
-
-			cartItemList.push({
-				barcode: product.barcode,
-				name: product.name,
-				description: product.desc,
-				price: parseFloat(product.price),
-			});
-		} catch (err) {
-			console.error(err);
-			await client.query("ROLLBACK");
-			return res.status(500).json({ error: "Database query failed" });
+		if (!barcodes || barcodes.length === 0) {
+			return res.status(400).json({ error: "Cart is empty" });
 		}
-	}
-	const cartId = "cart_" + Date.now();
-	const addCartListQuery = `
-    insert into carts (cart_id, item_details, total_amount, created_dt, payment_mode) values ($1,$2,$3,now(),'pending') returning *`;
-	const insertCartListResult = await pool.query(addCartListQuery, [
-		cartId,
-		JSON.stringify(cartItemList),
-		totalAmount,
-	]);
-	client.query("COMMIT");
-	if (insertCartListResult.rows.length === 0) {
-		return res.status(500).json({ error: "Failed to proceed cart" });
-	}
-	client.release();
-	return res.status(200).json({
-		message: "Cart proceeded",
-		cartId: insertCartListResult.rows[0].cart_id,
-		totalAmount: totalAmount,
-		items: cartItemList,
-	});
+		for (let i = 0; i < barcodes.length; i++) {
+			let getProduct = `
+				SELECT p.barcode, p.name, p.description AS desc, p.price 
+				FROM products p 
+				WHERE p.barcode = $1
+			`;
+			let barcodeTrimmed = barcodes[i].trim();
+			if(barcodes[i].startsWith("N/A-")){
+				const weight = barcodes[i].split("|")[1].trim();
+				let barcodeOnly = barcodes[i].split("|")[0].trim();
+				barcodeTrimmed = barcodeOnly;
+				console.log("weight", weight);
+				getProduct = `
+				SELECT p.barcode, p.name, p.description AS desc, (s.add_dtls->>'pricePerWeight')::numeric AS price
+				FROM products p
+				JOIN stocks s ON p.pk = s.product_id
+				WHERE p.barcode = $1
+			`;	
+			try {
+				client.query("BEGIN");
+				const productResult = await client.query(getProduct, [barcodeTrimmed]);
+				if (productResult.rows.length === 0) {
+					return res.status(404).json({
+						error: `Product with barcode ${cartList[i]} not found in cart`,
+					});
+				}
+				const product = productResult.rows[0];
+				totalAmount += parseFloat(product.price) * parseFloat(weight);
+
+				cartItemList.push({
+					barcode: product.barcode,
+					name: product.name,
+					description: product.desc,
+					price: parseFloat(product.price),
+				});
+			} catch (err) {
+				console.error(err);
+				await client.query("ROLLBACK");
+				return res.status(500).json({ error: "Database query failed" });
+			}
+		}
+		const cartId = "cart_" + Date.now();
+		const addCartListQuery = `
+		insert into carts (cart_id, item_details, total_amount, created_dt, payment_mode) values ($1,$2,$3,now(),'pending') returning *`;
+		const insertCartListResult = await pool.query(addCartListQuery, [
+			cartId,
+			JSON.stringify(cartItemList),
+			totalAmount,
+		]);
+		client.query("COMMIT");
+		if (insertCartListResult.rows.length === 0) {
+			return res.status(500).json({ error: "Failed to proceed cart" });
+		}
+		client.release();
+		return res.status(200).json({
+			message: "Cart proceeded",
+			cartId: insertCartListResult.rows[0].cart_id,
+			totalAmount: totalAmount,
+			items: cartItemList,
+		});
 };
+
+}
+
 
 const finalizeSaleController = async (req, res) => {
 	const { customerName, customerPhone, paymentMode, cartId } = req.body;
@@ -222,6 +243,9 @@ const finalizeSaleController = async (req, res) => {
 	const client = await pool.connect();
 	try {
 		await client.query("BEGIN");
+
+		const userDtls= await getUserDtlsWithToken(req.headers["authorization"]?.split(" ")[1]);
+		const upiId=userDtls.additional_dtls.upiId ||"rajeshkumaryadav98@oksbi"
 
 		const getCartDetails = "select item_details, total_amount from carts where cart_id=$1";
 		const cartDetailsResult = await client.query(getCartDetails, [cartId]);
@@ -238,7 +262,6 @@ const finalizeSaleController = async (req, res) => {
 		}
 
 		const total_amount = cartDetailsResult.rows[0].total_amount;
-
 		const bill = {
 			customerName: customerName,
 			customerPhone: customerPhone,
@@ -246,8 +269,11 @@ const finalizeSaleController = async (req, res) => {
 			items: cartItemList,
 			totalAmount: total_amount,
 			date: new Date().toLocaleString(),
+			paymentLink: "",
 		};
-
+		
+		const upiQrContent=`upi://pay?pa=${upiId}&pn=Rajesh&am=${total_amount}&cu=INR&aid=uGICAgMDh6cTFFQ`;
+		bill.paymentLink=upiQrContent;
 		const addBillQuery =
 			"update carts set custname=$1, custphone=$2, payment_mode=$3 where cart_id=$4 returning *";
 		const insertBillResult = await client.query(addBillQuery, [
