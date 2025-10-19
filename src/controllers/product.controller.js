@@ -3,31 +3,53 @@ import { addStock, checkProductExists, updateStock, addStockOfNonQuantizedItem, 
 import { getUserDtlsWithToken } from "../utils/util.js";
 import { addProduct } from "../utils/product.utils.js";
 import { redisClient } from "../db/redis.js";
+import { ResponseBody } from '../utils/responseBody.js';
+import { UserDtlsObj } from "../utils/userDtlsObj.js";
 
 const addProductController = async (req, res) => {
-	const { barcode, name, price, quantity, productImage, category, brand, add_dtls } = req.body;
+	const responseBody = new ResponseBody();
+	const { barcode, name, price, quantity, productImage, category, brand, discount, unit } = req.body;
 	let barcodeTrimmed = barcode ? barcode.trim() : "n/a";
 	if (quantity <= 0 || price <= 0) return res.status(400).json({ error: "Price and quantity must be greater than zero" });
 	const isQuantizedItem = req.body.isQuantizedItem || false;
-    if(barcodeTrimmed==="n/a"||barcodeTrimmed.isEmpty()) barcodeTrimmed = isQuantizedItem===false ? 'N/A-' + Date.now() : 'Q-' + Date.now();
+    if(barcodeTrimmed === "n/a" || barcodeTrimmed.trim() === "") barcodeTrimmed = isQuantizedItem===false ? 'N/A-' + Date.now() : 'Q-' + Date.now();
 	const client = await pool.connect();
 	try {
 		await client.query("BEGIN");
-		const user = await getUserDtlsWithToken(req.headers["authorization"]?.split(" ")[1]);
-		const userId = user.id;
+		const authHeader = req.headers["authorization"];
+		const token = authHeader.split(" ")[1];
+		const userId=(await new UserDtlsObj(client, token).getUser()).id;
+
+		const productVo={
+			barcode: barcodeTrimmed,
+			name: name,
+			price: price,
+			quantity: quantity,
+			productImage: productImage,
+			category: category,
+			brand: brand,
+			add_dtls: {},
+			userId: userId,
+			discount: discount || 0,
+			unit: unit || "kg"
+		}
+
 		if(isQuantizedItem===false && barcodeTrimmed.includes("N/A-")){
-			console.log(barcodeTrimmed, name, price, quantity, productImage, category, brand, add_dtls, userId)
-			const result = await addWithOutBarcode(client, barcodeTrimmed, name, price, quantity, productImage, category, brand, add_dtls, userId)
-			return res.status(201).json(result);
+			const result = await addWithOutBarcode(client, productVo)
+			await client.query("COMMIT");
+			responseBody.setData(result, "Product added successfully", 201);
+			return res
+		.status(responseBody.getResponse().statusCode)
+		.json(responseBody.getResponse().body);
+
 		}else{
 		if (await checkProductExists(client, barcodeTrimmed, userId)) {
 			const stock = await updateStock(client, barcodeTrimmed, quantity, userId);
-			console.log("stock", stock);
 			await client.query("COMMIT");
 			if (!stock) throw new Error("Failed to update stock");
 			return res.status(200).json({ message: "Stock updated", stock });
 		}
-		const productResult = await addProduct( client, barcodeTrimmed, name, price, name, userId, productImage, category, brand );
+		const productResult = await addProduct( client, productVo );
 		if (!productResult) throw new Error("Failed to add product");
 		const stock = await addStock(client, productResult.pk, quantity);
 		await client.query("COMMIT");
@@ -41,47 +63,55 @@ const addProductController = async (req, res) => {
 		await client.query("ROLLBACK");
 		console.error("Error adding product:", error);
 		res.status(500).json({ error: "Internal server error" });
-	} 
+	}finally {
+		if(client) client.release()
+	}
 };
 
-const addWithOutBarcode = async ( client, barcode, name, price, quantity, productImage, category, brand, add_dtls, userId ) => {
-	if (quantity <= 0 || price <= 0) throw new Error("Price and quantity must be greater than zero");
+
+const addWithOutBarcode = async ( client, productVo ) => {
+	if (productVo.quantity <= 0 || productVo.price <= 0) throw new Error("Price and quantity must be greater than zero");
 	try {
 		await client.query("BEGIN");
 		const checkIsExistsQuery = `SELECT COUNT(*) FROM products p WHERE p.name=$1 AND p.user_id=$2`
-		const isExistsResult = await client.query(checkIsExistsQuery, [name, userId]);
+		const isExistsResult = await client.query(checkIsExistsQuery, [productVo.name, productVo.userId]);
 
 		if (parseInt(isExistsResult.rows[0].count) > 0) {
 		const getBarcodeQuery = `SELECT p.barcode FROM products p WHERE p.name=$1 AND p.user_id=$2`
-		const barcodeResult = await client.query(getBarcodeQuery, [name, userId]);
+		const barcodeResult = await client.query(getBarcodeQuery, [productVo.name, productVo.userId]);
 		const barcode = barcodeResult.rows[0].barcode;
 		if (!barcode) throw new Error("Barcode not found for existing product");
 
 		const getProductIdQuery = "SELECT pk FROM products WHERE barcode = $1 AND user_id=$2";
-		const productResult = await client.query(getProductIdQuery, [barcode, userId]);
+		const productResult = await client.query(getProductIdQuery, [productVo.barcode, productVo.userId]);
 		if (productResult.rows.length === 0) throw new Error("Product not found");
 		const productId = productResult.rows[0].pk;
+		productVo.productId = productId;
 
-		const stock = await updateStockOfNonQuantizedItem( client, productId, add_dtls );
+		const stock = await updateStockOfNonQuantizedItem( client, productVo);
 		if (!stock) throw new Error("Failed to update stock for non-quantized item");
 		await client.query("COMMIT");
 		return { message: "Stock updated for non-quantized item", stock };
     	}
-		const productResult = await addProduct( client, barcode, name, price, name, userId, productImage, category, brand );
+		const productResult = await addProduct( client, productVo );
+
+		productVo.productId=productResult.pk
+		productVo.add_dtls.unit = productVo.unit || "kg"
+		productVo.add_dtls.pricePerWeight=productVo.price
+		productVo.add_dtls.last_weight=productVo.add_dtls.weight
+		productVo.add_dtls.discoount=productVo.discount
+
 		if (!productResult) throw new Error("Failed to add product");
 		console.log("New product added with barcode:", productResult.barcode);
-		const stock = await addStockOfNonQuantizedItem(client, add_dtls, productResult.pk);
+		const stock = await addStockOfNonQuantizedItem(client, productVo);
 
 		await client.query("COMMIT");
 		return { message: "New product added", product: productResult, stock };
-
 	} 
 	catch (error) {
 		await client.query("ROLLBACK");
 		console.error("Error in addWithOutBarcode:", error);
 		throw error;
-	} finally {
-		client.release();
 	}
 }
 
@@ -98,9 +128,10 @@ const checkoutProductController = async (req, res) => {
 		const userId = user.id;
 		const checkProductId =
 			"select p.pk from products p inner join users u on u.pk=p.user_id where user_id=$1 and p.barcode=$2";
+			
 		const productIdResult = await client.query(checkProductId, [userId, barcode]);
-		if (productIdResult.rows.length === 0) 
-			return res.status(404).json({ error: "Product not found" })
+		if (productIdResult.rows.length === 0)
+			return res.status(404).json({ error: "Product not found" });
 
 		const productId = productIdResult.rows[0].pk;
 		console.log("productId", productId);
@@ -111,7 +142,9 @@ const checkoutProductController = async (req, res) => {
 
 		const updateStockQuery = "update stocks set stock=stock-1 where product_id=$1 returning *";
 		if(barcode.startsWith("N/A-")){
-			const updateStockQuery = "update stocks set stock=stock-1, add_dtls=jsonb_set(add_dtls, '{weight}', to_jsonb((add_dtls->>'weight')::numeric - $2::numeric)) where product_id=$1 returning *";
+			const updateStockQuery = `update stocks set stock=stock-1, add_dtls=jsonb_set(add_dtls, '{weight}', 
+			to_jsonb((add_dtls->>'weight')::numeric - $2::numeric)) where product_id=$1 returning *`;
+
 			const result = await client.query(updateStockQuery, [productId, req.body.weight]);
 			client.query("COMMIT");
 			if (result.rows.length === 0)
@@ -127,7 +160,7 @@ const checkoutProductController = async (req, res) => {
 		client.release();
 		return res.status(200).json({ message: "Item added to cart", stock: result.rows[0] });
 };
- 
+
 const removeItemController = async (req, res) => {
 		const { barcode } = req.body;
 		if (!barcode) {
@@ -161,6 +194,7 @@ const removeItemController = async (req, res) => {
 		return res.status(200).json({ message: "Item removed from cart" });
 }
 
+
 const proceedCartController = async (req, res) => {
 		const { barcodes } = req.body;
 		let cartItemList = [];
@@ -181,7 +215,6 @@ const proceedCartController = async (req, res) => {
 				const weight = barcodes[i].split("|")[1].trim();
 				let barcodeOnly = barcodes[i].split("|")[0].trim();
 				barcodeTrimmed = barcodeOnly;
-				console.log("weight", weight);
 				getProduct = `
 				SELECT p.barcode, p.name, p.description AS desc, (s.add_dtls->>'pricePerWeight')::numeric AS price
 				FROM products p
@@ -230,10 +263,8 @@ const proceedCartController = async (req, res) => {
 			totalAmount: totalAmount,
 			items: cartItemList,
 		});
-};
-
 }
-
+}
 
 const finalizeSaleController = async (req, res) => {
 	const { customerName, customerPhone, paymentMode, cartId } = req.body;
@@ -318,24 +349,32 @@ const finalizeSaleController = async (req, res) => {
 
 
 const showProductController = async (req, res) => {
+	const responseBody = new ResponseBody();
 	const { searchKey } = req.params;
+	const { rowsPerPage, pageNo } = req.body;
 	const authHeader = req.headers["authorization"];
-
 	if (!authHeader) return res.status(401).json({ error: "Unauthorized" });
 
 	const token = authHeader.split(" ")[1];
 	const cacheKey = `products:${token}:${searchKey || "*"}`;
 
 	let client;
-	const timeoutMs = 8000; 
+	const timeoutMs = 5000;
 	const queryWithTimeout = (promise, ms) =>
-		Promise.race([
-			promise,
-			new Promise((_, reject) =>
-				setTimeout(() => reject(new Error("Query timeout")), ms)
-			),
-		]);
-
+		new Promise((resolve, reject) => {
+			const timer = setTimeout(() => {
+				reject(new Error("Query timed out"));
+			}, ms);
+			promise
+				.then((res) => {
+					clearTimeout(timer);
+					resolve(res);
+				})
+				.catch((err) => {
+					clearTimeout(timer);
+					reject(err);
+				});
+		});
 	try {
 		const returnObj={
 			products: [],
@@ -343,17 +382,17 @@ const showProductController = async (req, res) => {
 		}
 		const cached = await redisClient.get(cacheKey);
 		if (cached){
+			const cachedResponse = JSON.parse(cached);
+			cachedResponse.body.cached = true; 	
 			returnObj.cached=true
-			returnObj.products=JSON.parse(cached).products
-			return res.status(200).json(returnObj);
+			 return res
+    		.status(cachedResponse.statusCode)
+    		.json(cachedResponse.body);
 		} 
+
 		client = await pool.connect();
-		const user = await getUserDtlsWithToken(token);
-		if (!user) {
-			client.release();
-			return res.status(401).json({ error: "Unauthorized" });
-		}
-		const userId = user.id;
+		const userId= (await new UserDtlsObj(client, token).getUser()).id;
+		
 		if (!searchKey || searchKey.trim() === "") {
 			client.release();
 			return res.status(400).json({ error: "Search key is required" });
@@ -365,10 +404,12 @@ const showProductController = async (req, res) => {
 				FROM products p
 				JOIN stocks s ON p.pk = s.product_id
 				WHERE p.user_id = $1
-				ORDER BY p.created_dt DESC
-				limit 50
+				ORDER BY p.created_dt DESC limit $2 offset $3
 			`;
-			params = [userId];
+			let limit=rowsPerPage
+			let offset=(pageNo-1)*rowsPerPage
+			params = [userId, limit, offset];
+
 		} else {
 			query = `
 				SELECT p.barcode, p.name, p.price, p.description, s.stock
@@ -379,13 +420,15 @@ const showProductController = async (req, res) => {
 			`;
 			params = [userId, `%${searchKey}%`];
 		}
+		
 		const result = await queryWithTimeout(client.query(query, params), timeoutMs);
-		await redisClient.setEx(cacheKey, 30, JSON.stringify({ products: result.rows }));
 		if(!cached) {
 			returnObj.cached=false
-			returnObj.products=result.rows
+			returnObj.products = result.rows;
 		}
-		return res.status(200).json(returnObj);
+		responseBody.setData(returnObj, "Products retrieved successfully", 200);
+		await redisClient.setEx(cacheKey, 30, JSON.stringify(responseBody.getResponse()));
+		return res.status(responseBody.getResponse().statusCode).json(responseBody.getResponse().body);
 	} catch (err) {
 	console.error("❌ Product API Error →", err.stack || err);
 	if (client) {

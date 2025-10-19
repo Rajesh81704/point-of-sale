@@ -16,27 +16,20 @@ function generateRefreshToken(user) {
 	return token;
 }
 
-const getUserDtlsWithToken = async (token) => {
-	const client = await pool.connect();
+const getUserDtlsWithToken = async (client, token) => {
 	try {
-		client.query("BEGIN");
 		const decoded = jwt.verify(token, ACCESS_TOKEN_SECRET);
 		const userId = decoded.id;
 		const userQuery =
 			"select pk as id, username, email, phoneNo, additional_dtls, profile_image from users where pk=$1";
 		const userResult = await client.query(userQuery, [userId]);
-		client.query("COMMIT");
 		if (userResult.rows.length === 0) {
-			client.query("ROLLBACK");
 			return null;
 		}
 		return userResult.rows[0];
 	} catch (err) {
 		console.error("Error fetching user details:", err);
-		client.query("ROLLBACK");
 		return null;
-	}finally {
-		client.release();
 	}
 };
 
