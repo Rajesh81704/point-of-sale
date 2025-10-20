@@ -21,30 +21,44 @@ const addProduct = async (client, productVo) => {
 	return result.rows[0];
 };
 
-const addStock = async (client, productId, quantity) => {
+const addStock = async (client, productVo) => {
+
+	const productId = productVo.productId;
+	const quantity = productVo.quantity;
+	const mfgDate = productVo.mfgDate;
+	const expDate = productVo.expDate;
+
 	const query = `
-        INSERT INTO stocks (product_id, stock, last_stock, created_dt) 
-        VALUES ($1, $2, $3, NOW()) 
+        INSERT INTO stocks (product_id, stock, last_stock, created_dt, add_dtls) 
+        VALUES ($1, $2, $3, NOW(), $4::jsonb) 
         RETURNING *
     `;
-	const result = await client.query(query, [productId, quantity, quantity]);
+	const result = await client.query(query, [productId, quantity, quantity, JSON.stringify({ mfgDate, expDate, unit: productVo.unit, pricePerUnit: productVo.pricePerUnit })]);
 	return result.rows[0];
 };
 
-const addStockOfNonQuantizedItem = async (client, productVo, productId) => {
-  const query = `
+const addStockOfNonQuantizedItem = async (client, productVo) => {
+	const productId = productVo.productId;
+	const quantity = productVo.quantity;
+	const mfgDate = productVo.mfgDate;
+	const expDate = productVo.expDate;
+
+	const query = `
     INSERT INTO stocks (product_id, add_dtls, stock, last_stock, created_dt)
     VALUES ($1, $2::jsonb, $3, $4, NOW())
     RETURNING *;
   `;
   const obj={
-	weight: productVo.add_dtls.weight,
+	weight: quantity,
 	pricePerWeight: productVo.add_dtls.pricePerWeight,
-	last_weight: productVo.add_dtls.last_weight,
-	unit: productVo.add_dtls.unit
+	last_weight: quantity,
+	unit: productVo.add_dtls.unit,
+	mfgDate: mfgDate,
+	expDate: expDate
   }
+  console.log("obj", obj);
   
-  const result = await client.query(query, [productId, JSON.stringify(obj), productVo.add_dtls.weight, productVo.add_dtls.weight]);
+  const result = await client.query(query, [productId, JSON.stringify(obj), quantity, quantity]);
   return result.rows[0];
 }
 
@@ -53,13 +67,18 @@ export const updateStockOfNonQuantizedItem = async (client, productVo) => {
 	const query = `
 		UPDATE stocks 
 		SET add_dtls = jsonb_set(
-			jsonb_set(add_dtls, '{last_weight}', to_jsonb($1::numeric)),
-			'{pricePerWeight}', to_jsonb($2::numeric)
-		) 
-		WHERE product_id = $3 
+				jsonb_set(
+					jsonb_set(add_dtls, '{last_weight}', to_jsonb($1::numeric)),
+					'{pricePerWeight}', to_jsonb($2::numeric)
+				),
+				'{discount}', to_jsonb($3::numeric)
+			),
+			stock = $1,
+			last_stock = $1
+		WHERE product_id = $4 
 		RETURNING *;
 	`;
-	const result = await client.query(query, [productVo.quantity, productVo.price, productVo.productId]);
+	const result = await client.query(query, [productVo.quantity, productVo.price, productVo.discount, productVo.productId]);
 	if (result.rows.length === 0) {
 		throw new Error("Product not found");
 	}
