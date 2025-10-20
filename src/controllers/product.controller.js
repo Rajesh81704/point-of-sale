@@ -9,6 +9,7 @@ import { UserDtlsObj } from "../utils/userDtlsObj.js";
 const addProductController = async (req, res) => {
 	const responseBody = new ResponseBody();
 	const { barcode, name, price, quantity, productImage, category, brand, discount, unit } = req.body;
+	
 	let barcodeTrimmed = barcode ? barcode.trim() : "n/a";
 	if (quantity <= 0 || price <= 0) return res.status(400).json({ error: "Price and quantity must be greater than zero" });
 	const isQuantizedItem = req.body.isQuantizedItem || false;
@@ -31,7 +32,17 @@ const addProductController = async (req, res) => {
 			add_dtls: {},
 			userId: userId,
 			discount: discount || 0,
-			unit: unit || "kg"
+			unit: unit || "kg",
+			mfgDate: req.body.mfgDate,
+			expDate: req.body.expDate
+		}
+		if(isQuantizedItem===false && barcode.includes("N/A-")){
+			const result= await addWithOutBarcode(client, productVo)
+			await client.query("COMMIT");
+			responseBody.setData(result, "Product added successfully", 201);
+			return res
+		.status(responseBody.getResponse().statusCode)
+		.json(responseBody.getResponse().body);
 		}
 
 		if(isQuantizedItem===false && barcodeTrimmed.includes("N/A-")){
@@ -51,7 +62,8 @@ const addProductController = async (req, res) => {
 		}
 		const productResult = await addProduct( client, productVo );
 		if (!productResult) throw new Error("Failed to add product");
-		const stock = await addStock(client, productResult.pk, quantity);
+		productVo.productId=productResult.pk
+		const stock = await addStock(client, productVo);
 		await client.query("COMMIT");
 		return res.status(201).json({
 			message: "New product added",
@@ -68,38 +80,41 @@ const addProductController = async (req, res) => {
 	}
 };
 
-
 const addWithOutBarcode = async ( client, productVo ) => {
 	if (productVo.quantity <= 0 || productVo.price <= 0) throw new Error("Price and quantity must be greater than zero");
 	try {
 		await client.query("BEGIN");
-		const checkIsExistsQuery = `SELECT COUNT(*) FROM products p WHERE p.name=$1 AND p.user_id=$2`
-		const isExistsResult = await client.query(checkIsExistsQuery, [productVo.name, productVo.userId]);
+		const checkIsExistsQuery = `SELECT COUNT(*), p.pk FROM products p WHERE (p.barcode=$1 or p.name=$2) and p.user_id=$3 GROUP BY p.pk`;
+		const isExistsResult = await client.query(checkIsExistsQuery, [productVo.barcode, productVo.name, productVo.userId]);
 
 		if (parseInt(isExistsResult.rows[0].count) > 0) {
-		const getBarcodeQuery = `SELECT p.barcode FROM products p WHERE p.name=$1 AND p.user_id=$2`
-		const barcodeResult = await client.query(getBarcodeQuery, [productVo.name, productVo.userId]);
-		const barcode = barcodeResult.rows[0].barcode;
-		if (!barcode) throw new Error("Barcode not found for existing product");
-
-		const getProductIdQuery = "SELECT pk FROM products WHERE barcode = $1 AND user_id=$2";
-		const productResult = await client.query(getProductIdQuery, [productVo.barcode, productVo.userId]);
-		if (productResult.rows.length === 0) throw new Error("Product not found");
-		const productId = productResult.rows[0].pk;
+		let productId = isExistsResult.rows[0].pk;
+		if (!productId) throw new Error("Product not found or does not exist");
+		
 		productVo.productId = productId;
-
-		const stock = await updateStockOfNonQuantizedItem( client, productVo);
+		const updateProductQuery = `update products set price=$1, description=$2, category=$3, brand=$4, product_image=$5 where pk=$6 returning *`;
+		const updateProductResult = await client.query(updateProductQuery, [
+			productVo.price,
+			productVo.description,
+			productVo.category,
+			productVo.brand,
+			productVo.productImage,
+			productId
+		]);
+		if(updateProductResult.rows.length===0) throw new Error("Failed to update product details");
+		else{
+		const stock = await updateStockOfNonQuantizedItem( client, productVo );
 		if (!stock) throw new Error("Failed to update stock for non-quantized item");
 		await client.query("COMMIT");
 		return { message: "Stock updated for non-quantized item", stock };
-    	}
+		}
+		}
 		const productResult = await addProduct( client, productVo );
 
-		productVo.productId=productResult.pk
 		productVo.add_dtls.unit = productVo.unit || "kg"
 		productVo.add_dtls.pricePerWeight=productVo.price
 		productVo.add_dtls.last_weight=productVo.add_dtls.weight
-		productVo.add_dtls.discoount=productVo.discount
+		productVo.add_dtls.discount=productVo.discount
 
 		if (!productResult) throw new Error("Failed to add product");
 		console.log("New product added with barcode:", productResult.barcode);
@@ -631,7 +646,7 @@ export {
 	showProductController,
 	stockAlertController,
 	salesReportController,
-	periodicSalesReport,
+	periodicSalesReport
 };
 
 
