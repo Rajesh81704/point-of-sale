@@ -74,11 +74,11 @@ export const updateStockOfNonQuantizedItem = async (client, productVo) => {
 				'{discount}', to_jsonb($3::numeric)
 			),
 			stock = $1,
-			last_stock = $1
+			last_stock = $1, last_updated_dt=$5
 		WHERE product_id = $4 
 		RETURNING *;
 	`;
-	const result = await client.query(query, [productVo.quantity, productVo.price, productVo.discount, productVo.productId]);
+	const result = await client.query(query, [productVo.quantity, productVo.price, productVo.discount, productVo.productId, new Date()]);
 	if (result.rows.length === 0) {
 		throw new Error("Product not found");
 	}
@@ -104,7 +104,88 @@ const updateStock = async (client, barcode, quantity, userId) => {
 	return result.rows[0];
 };
 
-export { checkProductExists, addStock, updateStock, addProduct, addStockOfNonQuantizedItem };
+const updateProductIfExists = async (client, productVo) => {
+	try {
+		const getProductDtlsQuery = `
+			SELECT * FROM products WHERE barcode = $1 AND user_id = $2
+		`;
+		const productResult = await client.query(getProductDtlsQuery, [
+			productVo.barcode,
+			productVo.userId,
+		]);
+
+		if (productResult.rows.length === 0) {
+			throw new Error("Product not found");
+		}
+		const existingProduct = productResult.rows[0];
+		const productId = existingProduct.pk;
+		productVo.productId = productId;
+
+		productVo.add_dtls = productVo.add_dtls || {};
+		productVo.add_dtls.unit = productVo.unit || existingProduct.unit || "kg";
+		productVo.add_dtls.pricePerWeight = productVo.price ?? existingProduct.price;
+		productVo.add_dtls.last_weight =
+			productVo.add_dtls.weight ?? existingProduct.weight ?? 0;
+		productVo.add_dtls.discount =
+			productVo.discount ?? existingProduct.discount ?? 0;
+
+		const mfgDate = productVo.mfgDate
+			? new Date(productVo.mfgDate)
+			: existingProduct.mfg_date;
+		const expDate = productVo.expDate
+			? new Date(productVo.expDate)
+			: existingProduct.exp_date;
+		const description = productVo.description || existingProduct.description;
+
+		const updateFields = [];
+		const updateValues = [];
+		let idx = 1;
+
+		const updatableColumns = {
+			price: productVo.price,
+			description: description,
+			category: productVo.category,
+			brand: productVo.brand,
+			product_image: productVo.productImage,
+			mfg_date: mfgDate,
+			exp_date: expDate,
+		};
+
+		for (const [col, val] of Object.entries(updatableColumns)) {
+			if (val !== undefined && val !== null) {
+				updateFields.push(`${col}=$${idx++}`);
+				updateValues.push(val);
+			}
+		}
+
+		updateFields.push(`updated_dt=$${idx++}`);
+		updateValues.push(new Date());
+		updateValues.push(productId);
+
+		const updateProductQuery = `
+			UPDATE products
+			SET ${updateFields.join(", ")}
+			WHERE pk=$${idx}
+			RETURNING *;
+		`;
+
+		const updateProductResult = await client.query(updateProductQuery, updateValues);
+		if (updateProductResult.rows.length === 0)
+			throw new Error("Failed to update product details");
+
+		const stock = await updateStockOfNonQuantizedItem(client, productVo);
+		if (!stock) throw new Error("Failed to update stock for non-quantized item");
+
+		return { message: "Stock updated for non-quantized item", stock };
+
+	} catch (error) {
+		console.error("Error in updateProductIfExists:", error);
+		throw error;
+	}
+};
+
+
+export { checkProductExists, addStock, updateStock, addProduct, addStockOfNonQuantizedItem, updateProductIfExists };
 
 
 
