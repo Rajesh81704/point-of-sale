@@ -5,6 +5,7 @@ import { addProduct } from "../utils/product.utils.js";
 import { redisClient } from "../db/redis.js";
 import { ResponseBody } from '../utils/responseBody.js';
 import { UserDtlsObj } from "../utils/userDtlsObj.js";
+import { updateProductIfExists } from "../utils/product.utils.js";
 
 const addProductController = async (req, res) => {
 	const responseBody = new ResponseBody();
@@ -32,17 +33,10 @@ const addProductController = async (req, res) => {
 			add_dtls: {},
 			userId: userId,
 			discount: discount || 0,
-			unit: unit || "kg",
+			unit: unit || "pcs",
+			description: req.body.desc || (name+" | "+category+" | "+brand),
 			mfgDate: req.body.mfgDate,
 			expDate: req.body.expDate
-		}
-		if(isQuantizedItem===false && barcode.includes("N/A-")){
-			const result= await addWithOutBarcode(client, productVo)
-			await client.query("COMMIT");
-			responseBody.setData(result, "Product added successfully", 201);
-			return res
-		.status(responseBody.getResponse().statusCode)
-		.json(responseBody.getResponse().body);
 		}
 
 		if(isQuantizedItem===false && barcodeTrimmed.includes("N/A-")){
@@ -55,10 +49,9 @@ const addProductController = async (req, res) => {
 
 		}else{
 		if (await checkProductExists(client, barcodeTrimmed, userId)) {
-			const stock = await updateStock(client, barcodeTrimmed, quantity, userId);
+			const updatedProduct=await updateProductIfExists(client, productVo);
 			await client.query("COMMIT");
-			if (!stock) throw new Error("Failed to update stock");
-			return res.status(200).json({ message: "Stock updated", stock });
+			return res.status(200).json({ message: "Product updated successfully" });
 		}
 		const productResult = await addProduct( client, productVo );
 		if (!productResult) throw new Error("Failed to add product");
@@ -71,6 +64,7 @@ const addProductController = async (req, res) => {
 			stock,
 		});
 	}
+
 	} catch (error) {
 		await client.query("ROLLBACK");
 		console.error("Error adding product:", error);
@@ -84,32 +78,21 @@ const addWithOutBarcode = async ( client, productVo ) => {
 	if (productVo.quantity <= 0 || productVo.price <= 0) throw new Error("Price and quantity must be greater than zero");
 	try {
 		await client.query("BEGIN");
-		const checkIsExistsQuery = `SELECT COUNT(*), p.pk FROM products p WHERE (p.barcode=$1 or p.name=$2) and p.user_id=$3 GROUP BY p.pk`;
-		const isExistsResult = await client.query(checkIsExistsQuery, [productVo.barcode, productVo.name, productVo.userId]);
 
-		if (parseInt(isExistsResult.rows[0].count) > 0) {
-		let productId = isExistsResult.rows[0].pk;
-		if (!productId) throw new Error("Product not found or does not exist");
-		
-		productVo.productId = productId;
-		const updateProductQuery = `update products set price=$1, description=$2, category=$3, brand=$4, product_image=$5 where pk=$6 returning *`;
-		const updateProductResult = await client.query(updateProductQuery, [
-			productVo.price,
-			productVo.description,
-			productVo.category,
-			productVo.brand,
-			productVo.productImage,
-			productId
-		]);
-		if(updateProductResult.rows.length===0) throw new Error("Failed to update product details");
-		else{
-		const stock = await updateStockOfNonQuantizedItem( client, productVo );
-		if (!stock) throw new Error("Failed to update stock for non-quantized item");
-		await client.query("COMMIT");
-		return { message: "Stock updated for non-quantized item", stock };
-		}
+		let checkIsExists = await checkProductExists(
+			client,
+			productVo.barcode,
+			productVo.userId
+		);
+
+		if (checkIsExists) {
+			const result = await updateProductIfExists(client, productVo);
+			await client.query("COMMIT");
+			return result;
 		}
 		const productResult = await addProduct( client, productVo );
+		let productId=productResult.pk;
+		productVo.productId=productId;
 
 		productVo.add_dtls.unit = productVo.unit || "kg"
 		productVo.add_dtls.pricePerWeight=productVo.price
