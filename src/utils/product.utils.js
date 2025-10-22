@@ -1,5 +1,5 @@
 const checkProductExists = async (client, barcode, userId) => {
-	const result = await client.query("SELECT COUNT(*) FROM products WHERE barcode = $1 AND user_id = $2", [barcode, userId]);
+	const result = await client.query("SELECT COUNT(*) FROM products WHERE barcode = $1 AND user_id = $2 and active_flag=true", [barcode, userId]);
 	return parseInt(result.rows[0].count) > 0;
 };
 const addProduct = async (client, productVo) => {
@@ -67,7 +67,7 @@ const addStockOfNonQuantizedItem = async (client, productVo) => {
 const updateProductIfExists = async (client, productVo) => {
 	try {
 		const getProductDtlsQuery = `
-			SELECT * FROM products WHERE barcode = $1 AND user_id = $2
+			SELECT * FROM products WHERE barcode = $1 AND user_id = $2 and active_flag=true
 		`;
 		const productResult = await client.query(getProductDtlsQuery, [
 			productVo.barcode,
@@ -152,7 +152,7 @@ const updateProductIfExists = async (client, productVo) => {
 };
 
 const updateStock = async (client, productVo) => {
-	const getProductIdQuery = "SELECT pk FROM products WHERE barcode = $1 AND user_id = $2";
+	const getProductIdQuery = "select pk FROM products WHERE barcode = $1 AND user_id = $2 and active_flag=true";
 	const productResult = await client.query(getProductIdQuery, [productVo.barcode, productVo.userId]);
 	console.log("productResult", productResult.rows[0].pk);
 	if (productResult.rows.length === 0) {

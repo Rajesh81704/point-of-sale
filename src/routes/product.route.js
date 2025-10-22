@@ -2,8 +2,8 @@ import express from "express";
 import { authenticateAccessToken as protectedRoute } from "../middleware/middleware.js";
 import {
 	addProductController,
-	checkoutProductController,
-	removeItemController,
+	// checkoutProductController,
+	// removeItemController,
 	proceedCartController,
 	finalizeSaleController,
 	showProductController,
@@ -15,10 +15,6 @@ import {
 const productRouter = express.Router();
 
 productRouter.post("/add-product", protectedRoute, addProductController);
-
-// productRouter.post("/checkout", protectedRoute, checkoutProductController);
-
-// productRouter.post("/remove-item", protectedRoute, removeItemController);
 
 productRouter.post("/proceed-cart", protectedRoute, proceedCartController);
 

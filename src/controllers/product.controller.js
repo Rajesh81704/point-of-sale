@@ -123,98 +123,103 @@ const deleteProductController = async (req, res) => {
 	try {
 		const deleteProductQuery = "update products set active_flag=false where barcode=$1 and user_id=$2 returning *";
 		const client= await pool.connect();
+		const authHeader = req.headers["authorization"];
+		const token = authHeader.split(" ")[1];
 		const userId=(await new UserDtlsObj(client, token).getUser()).id;
-		const result = await client.query(deleteProductQuery, [barcode, userId]);
+
+		const result=await client.query(deleteProductQuery, [barcode, userId]);
 		if (result.rows.length === 0) {
 			return res.status(404).json({ error: "Product not found" });
 		}
-		return res.status(200).json({ message: "Product deleted successfully" });
+		const deletedProduct = result.rows[0];
+		return res.status(200).json({ message: "Product deleted successfully", product: deletedProduct });
 	} catch (error) {
 		console.error("Error deleting product:", error);
 		return res.status(500).json({ error: "Internal server error" });
 	} finally {
+		if(client)
 		client.release();
 	}
 };
 
-const checkoutProductController = async (req, res) => {
-		const { barcode } = req.body;
-		if (!barcode) return res.status(400).json({ error: "Barcode is required" })
-		const client = await pool.connect();
-		client.query("BEGIN");
-		const user = await getUserDtlsWithToken(req.headers["authorization"]?.split(" ")[1]);
-		if (!user) {
-			await client.query("ROLLBACK");
-			return res.status(401).json({ error: "Unauthorized" });
-		}
-		const userId = user.id;
-		const checkProductId =
-			"select p.pk from products p inner join users u on u.pk=p.user_id where user_id=$1 and p.barcode=$2";
+// const checkoutProductController = async (req, res) => {
+// 		const { barcode } = req.body;
+// 		if (!barcode) return res.status(400).json({ error: "Barcode is required" })
+// 		const client = await pool.connect();
+// 		client.query("BEGIN");
+// 		const user = await getUserDtlsWithToken(req.headers["authorization"]?.split(" ")[1]);
+// 		if (!user) {
+// 			await client.query("ROLLBACK");
+// 			return res.status(401).json({ error: "Unauthorized" });
+// 		}
+// 		const userId = user.id;
+// 		const checkProductId =
+// 			"select p.pk from products p inner join users u on u.pk=p.user_id where user_id=$1 and p.barcode=$2";
 			
-		const productIdResult = await client.query(checkProductId, [userId, barcode]);
-		if (productIdResult.rows.length === 0)
-			return res.status(404).json({ error: "Product not found" });
+// 		const productIdResult = await client.query(checkProductId, [userId, barcode]);
+// 		if (productIdResult.rows.length === 0)
+// 			return res.status(404).json({ error: "Product not found" });
 
-		const productId = productIdResult.rows[0].pk;
-		console.log("productId", productId);
-		const checkStock = "select stock from stocks where product_id=$1";
-		const stockResult = await client.query(checkStock, [productId]);
-		if (stockResult.rows.length === 0 || stockResult.rows[0].stock <= 0)
-			return res.status(404).json({ error: "Product not found or out of stock" });
+// 		const productId = productIdResult.rows[0].pk;
+// 		console.log("productId", productId);
+// 		const checkStock = "select stock from stocks where product_id=$1";
+// 		const stockResult = await client.query(checkStock, [productId]);
+// 		if (stockResult.rows.length === 0 || stockResult.rows[0].stock <= 0)
+// 			return res.status(404).json({ error: "Product not found or out of stock" });
 
-		const updateStockQuery = "update stocks set stock=stock-1 where product_id=$1 returning *";
-		if(barcode.startsWith("N/A-")){
-			const updateStockQuery = `update stocks set stock=stock-1, add_dtls=jsonb_set(add_dtls, '{weight}', 
-			to_jsonb((add_dtls->>'weight')::numeric - $2::numeric)) where product_id=$1 returning *`;
+// 		const updateStockQuery = "update stocks set stock=stock-1 where product_id=$1 returning *";
+// 		if(barcode.startsWith("N/A-")){
+// 			const updateStockQuery = `update stocks set stock=stock-1, add_dtls=jsonb_set(add_dtls, '{weight}', 
+// 			to_jsonb((add_dtls->>'weight')::numeric - $2::numeric)) where product_id=$1 returning *`;
 
-			const result = await client.query(updateStockQuery, [productId, req.body.weight]);
-			client.query("COMMIT");
-			if (result.rows.length === 0)
-				return res.status(400).json({ error: "Failed to add item to cart" });
-			client.release();
-			return res.status(200).json({ message: "Item added to cart", stock: result.rows[0] });
-		}
+// 			const result = await client.query(updateStockQuery, [productId, req.body.weight]);
+// 			client.query("COMMIT");
+// 			if (result.rows.length === 0)
+// 				return res.status(400).json({ error: "Failed to add item to cart" });
+// 			client.release();
+// 			return res.status(200).json({ message: "Item added to cart", stock: result.rows[0] });
+// 		}
 
-		const result = await client.query(updateStockQuery, [productId]);
-		client.query("COMMIT");
-		if (result.rows.length === 0) 
-			return res.status(400).json({ error: "Failed to add item to cart" });
-		client.release();
-		return res.status(200).json({ message: "Item added to cart", stock: result.rows[0] });
-};
+// 		const result = await client.query(updateStockQuery, [productId]);
+// 		client.query("COMMIT");
+// 		if (result.rows.length === 0) 
+// 			return res.status(400).json({ error: "Failed to add item to cart" });
+// 		client.release();
+// 		return res.status(200).json({ message: "Item added to cart", stock: result.rows[0] });
+// };
 
-const removeItemController = async (req, res) => {
-		const { barcode } = req.body;
-		if (!barcode) {
-			return res.status(400).json({ error: "Barcode is required" });
-		}
-		const client = await pool.connect();
-		const checkProductId = "select pk from products where barcode=$1";
-		const productIdResult = await client.query(checkProductId, [barcode]);
-		if (productIdResult.rows.length === 0) {
-			return res.status(404).json({ error: "Product not found" });
-		}
-		const productId = productIdResult.rows[0].pk;
-		const checkStock = "select stock from stocks where product_id=$1";
-		const stockResult = await pool.query(checkStock, [productId]);
-		if (stockResult.rows.length === 0 || stockResult.rows[0].stock <= 0) 
-			return res.status(404).json({ error: "Product not found or out of stock" });
+// const removeItemController = async (req, res) => {
+// 		const { barcode } = req.body;
+// 		if (!barcode) {
+// 			return res.status(400).json({ error: "Barcode is required" });
+// 		}
+// 		const client = await pool.connect();
+// 		const checkProductId = "select pk from products where barcode=$1";
+// 		const productIdResult = await client.query(checkProductId, [barcode]);
+// 		if (productIdResult.rows.length === 0) {
+// 			return res.status(404).json({ error: "Product not found" });
+// 		}
+// 		const productId = productIdResult.rows[0].pk;
+// 		const checkStock = "select stock from stocks where product_id=$1";
+// 		const stockResult = await pool.query(checkStock, [productId]);
+// 		if (stockResult.rows.length === 0 || stockResult.rows[0].stock <= 0) 
+// 			return res.status(404).json({ error: "Product not found or out of stock" });
 		
-		if(barcode.startsWith("N/A-")){
-			const query="update stocks set stock=stock+$1, add_dtls=jsonb_set(add_dtls, '{weight}', to_jsonb((add_dtls->>'weight')::numeric + $1::numeric)) where product_id=$2 returning *"
-			const result = await client.query(query, [req.body.weight, productId]);
-			if (result.rows.length === 0)
-				return res.status(400).json({ error: "Failed to remove item from cart" });
-			return res.status(200).json({ message: "Item removed from cart", stock: result.rows[0] });
-		}
+// 		if(barcode.startsWith("N/A-")){
+// 			const query="update stocks set stock=stock+$1, add_dtls=jsonb_set(add_dtls, '{weight}', to_jsonb((add_dtls->>'weight')::numeric + $1::numeric)) where product_id=$2 returning *"
+// 			const result = await client.query(query, [req.body.weight, productId]);
+// 			if (result.rows.length === 0)
+// 				return res.status(400).json({ error: "Failed to remove item from cart" });
+// 			return res.status(200).json({ message: "Item removed from cart", stock: result.rows[0] });
+// 		}
 
-		const removeStockQuery = "update stocks set stock=stock+1 where product_id=$1 returning *";
-		const result = await client.query(removeStockQuery, [productId]);
-		if (result.rows.length === 0) 
-			return res.status(400).json({ error: "Failed to remove item from cart" });
+// 		const removeStockQuery = "update stocks set stock=stock+1 where product_id=$1 returning *";
+// 		const result = await client.query(removeStockQuery, [productId]);
+// 		if (result.rows.length === 0) 
+// 			return res.status(400).json({ error: "Failed to remove item from cart" });
 		
-		return res.status(200).json({ message: "Item removed from cart" });
-}
+// 		return res.status(200).json({ message: "Item removed from cart" });
+// }
 
 
 const proceedCartController = async (req, res) => {
@@ -239,7 +244,7 @@ const proceedCartController = async (req, res) => {
 			let getProduct = `
 				SELECT p.pk, p.name, p.description AS desc, p.price 
 				FROM products p 
-				WHERE p.barcode = $1 and p.user_id=$2
+				WHERE p.barcode = $1 and p.user_id=$2 and p.active_flag=true
 			`;
 			let barcodeTrimmed = barcodes[i].trim();
 			if(barcodes[i].startsWith("N/A-")){
@@ -250,7 +255,7 @@ const proceedCartController = async (req, res) => {
 				SELECT p.pk, p.name, p.description AS desc, (s.add_dtls->>'pricePerWeight')::numeric AS price
 				FROM products p
 				JOIN stocks s ON p.pk = s.product_id
-				WHERE p.barcode = $1 and p.user_id=$2
+				WHERE p.barcode = $1 and p.user_id=$2 and p.active_flag=true
 			`;
 			const getProductIdQuery = "SELECT pk FROM products WHERE barcode = $1 AND user_id = $2";
 			try {
@@ -501,7 +506,8 @@ const stockAlertController = async (req, res) => {
 		FROM products p
 		INNER JOIN stocks s ON p.pk = s.product_id
 		INNER JOIN users u ON u.pk = p.user_id
-		WHERE (s.stock < s.last_stock * 0.2 OR s.stock < 10) AND u.pk = $1
+		WHERE (s.stock < s.last_stock * 0.2 OR s.stock < 10) AND u.pk = $1 
+		and p.active_flag=true
 		ORDER BY s.stock ASC
 	`;
 	try {
@@ -667,8 +673,8 @@ const allSellsData = async (client, days = 30) => {
 
 export {
 	addProductController,
-	checkoutProductController,
-	removeItemController,
+	// checkoutProductController,
+	// removeItemController,
 	proceedCartController,
 	finalizeSaleController,
 	showProductController,
