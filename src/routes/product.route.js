@@ -9,11 +9,12 @@ import {
 	showProductController,
 	stockAlertController,
 	salesReportController,
+	deleteProductController
 } from "../controllers/product.controller.js";
 
 const productRouter = express.Router();
 
-roductRouter.post("/add-product", protectedRoute, addProductController);
+productRouter.post("/add-product", protectedRoute, addProductController);
 
 // productRouter.post("/checkout", protectedRoute, checkoutProductController);
 
