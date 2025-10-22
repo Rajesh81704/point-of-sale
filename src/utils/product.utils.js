@@ -63,46 +63,6 @@ const addStockOfNonQuantizedItem = async (client, productVo) => {
 }
 
 
-export const updateStockOfNonQuantizedItem = async (client, productVo) => {
-	const query = `
-		UPDATE stocks 
-		SET add_dtls = jsonb_set(
-				jsonb_set(
-					jsonb_set(add_dtls, '{last_weight}', to_jsonb($1::numeric)),
-					'{pricePerWeight}', to_jsonb($2::numeric)
-				),
-				'{discount}', to_jsonb($3::numeric)
-			),
-			stock = $1,
-			last_stock = $1, last_updated_dt=$5
-		WHERE product_id = $4 
-		RETURNING *;
-	`;
-	const result = await client.query(query, [productVo.quantity, productVo.price, productVo.discount, productVo.productId, new Date()]);
-	if (result.rows.length === 0) {
-		throw new Error("Product not found");
-	}
-	return result.rows[0];
-};
-
-
-const updateStock = async (client, barcode, quantity, userId) => {
-	const getProductIdQuery = "SELECT pk FROM products WHERE barcode = $1 AND user_id = $2";
-	const productResult = await client.query(getProductIdQuery, [barcode, userId]);
-	console.log("productResult", productResult.rows[0].pk);
-	if (productResult.rows.length === 0) {
-		throw new Error("Product not found");
-	}
-	const productId = productResult.rows[0].pk;
-	const query = `
-        UPDATE stocks 
-        SET stock = stock + $1, last_stock = last_stock + $1 
-        WHERE product_id = $2 
-        RETURNING *
-    `;
-	const result = await client.query(query, [quantity, productId]);
-	return result.rows[0];
-};
 
 const updateProductIfExists = async (client, productVo) => {
 	try {
@@ -169,10 +129,17 @@ const updateProductIfExists = async (client, productVo) => {
 			RETURNING *;
 		`;
 
+		console.log(productVo)
+
 		const updateProductResult = await client.query(updateProductQuery, updateValues);
 		if (updateProductResult.rows.length === 0)
 			throw new Error("Failed to update product details");
 
+		if(productVo.isQuantized || !productVo.barcode.startsWith('N/A')){
+			const stock = await updateStock(client, productVo)
+			if (!stock) throw new Error("Failed to update stock for quantized item");
+			return { message: "Stock updated for quantized item", stock };
+		}
 		const stock = await updateStockOfNonQuantizedItem(client, productVo);
 		if (!stock) throw new Error("Failed to update stock for non-quantized item");
 
@@ -184,8 +151,87 @@ const updateProductIfExists = async (client, productVo) => {
 	}
 };
 
+const updateStock = async (client, productVo) => {
+	const getProductIdQuery = "SELECT pk FROM products WHERE barcode = $1 AND user_id = $2";
+	const productResult = await client.query(getProductIdQuery, [productVo.barcode, productVo.userId]);
+	console.log("productResult", productResult.rows[0].pk);
+	if (productResult.rows.length === 0) {
+		throw new Error("Product not found");
+	}
+	const productId = productResult.rows[0].pk;
+	const query = `
+        UPDATE stocks 
+        SET stock = stock + $1, last_stock = last_stock + $1 
+        WHERE product_id = $2 
+        RETURNING *
+    `;
+	const result = await client.query(query, [quantity, productId]);
+	return result.rows[0];
+};
 
-export { checkProductExists, addStock, updateStock, addProduct, addStockOfNonQuantizedItem, updateProductIfExists };
 
+export const updateStockOfNonQuantizedItem = async (client, productVo) => {
+	const query = `
+		UPDATE stocks 
+		SET add_dtls = jsonb_set(
+				jsonb_set(
+					jsonb_set(add_dtls, '{last_weight}', to_jsonb($1::numeric)),
+					'{pricePerWeight}', to_jsonb($2::numeric)
+				),
+				'{discount}', to_jsonb($3::numeric)
+			),
+			stock = $1,
+			last_stock = $1, last_updated_dt=$5
+		WHERE product_id = $4 
+		RETURNING *;
+	`;
+	const result = await client.query(query, [productVo.quantity, productVo.price, productVo.discount, productVo.productId, new Date()]);
+	if (result.rows.length === 0) {
+		throw new Error("Product not found");
+	}
+	return result.rows[0];
+};
 
+const checkoutInventory = async (client, productVo) => {
+		const stockResult = await client.query("SELECT stock FROM stocks WHERE product_id = $1", [productVo.productId]);
+		if (stockResult.rows.length === 0 || stockResult.rows[0].stock <= 0) {
+			await client.query("ROLLBACK");
+			return { status: 404, body: { error: "Product not found or out of stock" } };
+		}
+		let weight = productVo.quantity || 1;
+		const productId = productVo.productId;
+		let updateStockQuery, queryParams;
+		if (productVo.barcode.startsWith("N/A-")) {
+			updateStockQuery = `
+				UPDATE stocks 
+				SET stock = stock - 1, 
+					add_dtls = jsonb_set(
+						add_dtls, '{weight}', 
+						to_jsonb((add_dtls->>'weight')::numeric - $2::numeric)
+					) 
+				WHERE product_id = $1 
+				RETURNING *;
+			`;
+			queryParams = [productId, weight];
+		} else {
+			updateStockQuery = `
+				UPDATE stocks 
+				SET stock = stock - 1 
+				WHERE product_id = $1 
+				RETURNING *;
+			`;
+			queryParams = [productId];
+		}
+		const result = await client.query(updateStockQuery, queryParams);
+		return result.rows[0];
+}
 
+export { 
+	checkProductExists, 
+	addStock, 
+	updateStock, 
+	addProduct, 
+	addStockOfNonQuantizedItem, 
+	updateProductIfExists,
+	checkoutInventory
+};
