@@ -13,11 +13,11 @@ import {
 
 const productRouter = express.Router();
 
-productRouter.post("/add-product", protectedRoute, addProductController);
+roductRouter.post("/add-product", protectedRoute, addProductController);
 
-productRouter.post("/checkout", protectedRoute, checkoutProductController);
+// productRouter.post("/checkout", protectedRoute, checkoutProductController);
 
-productRouter.post("/remove-item", protectedRoute, removeItemController);
+// productRouter.post("/remove-item", protectedRoute, removeItemController);
 
 productRouter.post("/proceed-cart", protectedRoute, proceedCartController);
 
@@ -28,6 +28,10 @@ productRouter.get("/show-product/:searchKey", protectedRoute, showProductControl
 productRouter.get("/stock-alert", protectedRoute, stockAlertController);
 
 productRouter.post("/sales-report", protectedRoute, salesReportController);
+
+productRouter.post("/sales-report", protectedRoute, salesReportController);
+
+productRouter.post("/delete-product", protectedRoute, deleteProductController);
 
 export { productRouter };
 
