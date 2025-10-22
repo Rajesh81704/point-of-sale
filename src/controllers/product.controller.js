@@ -6,6 +6,7 @@ import { redisClient } from "../db/redis.js";
 import { ResponseBody } from '../utils/responseBody.js';
 import { UserDtlsObj } from "../utils/userDtlsObj.js";
 import { updateProductIfExists } from "../utils/product.utils.js";
+import { checkoutInventory } from "../utils/product.utils.js";
 
 const addProductController = async (req, res) => {
 	const responseBody = new ResponseBody();
@@ -113,6 +114,29 @@ const addWithOutBarcode = async ( client, productVo ) => {
 	}
 }
 
+const deleteProductController = async (req, res) => {
+	const { barcode } = req.body;
+	if (!barcode) {
+		return res.status(400).json({ error: "Barcode is required" });
+	}
+	const client = await pool.connect();
+	try {
+		const deleteProductQuery = "update products set active_flag=false where barcode=$1 and user_id=$2 returning *";
+		const client= await pool.connect();
+		const userId=(await new UserDtlsObj(client, token).getUser()).id;
+		const result = await client.query(deleteProductQuery, [barcode, userId]);
+		if (result.rows.length === 0) {
+			return res.status(404).json({ error: "Product not found" });
+		}
+		return res.status(200).json({ message: "Product deleted successfully" });
+	} catch (error) {
+		console.error("Error deleting product:", error);
+		return res.status(500).json({ error: "Internal server error" });
+	} finally {
+		client.release();
+	}
+};
+
 const checkoutProductController = async (req, res) => {
 		const { barcode } = req.body;
 		if (!barcode) return res.status(400).json({ error: "Barcode is required" })
@@ -198,15 +222,24 @@ const proceedCartController = async (req, res) => {
 		let cartItemList = [];
 		let totalAmount = 0;
 		let client = await pool.connect();
+		const authHeader = req.headers["authorization"];
+		const token = authHeader.split(" ")[1];
+		const userId=(await new UserDtlsObj(client, token).getUser()).id;
+
+		let productVo={
+			userId: userId,
+			barcode: '',
+			productId: ''
+		}
 
 		if (!barcodes || barcodes.length === 0) {
 			return res.status(400).json({ error: "Cart is empty" });
 		}
 		for (let i = 0; i < barcodes.length; i++) {
 			let getProduct = `
-				SELECT p.barcode, p.name, p.description AS desc, p.price 
+				SELECT p.pk, p.name, p.description AS desc, p.price 
 				FROM products p 
-				WHERE p.barcode = $1
+				WHERE p.barcode = $1 and p.user_id=$2
 			`;
 			let barcodeTrimmed = barcodes[i].trim();
 			if(barcodes[i].startsWith("N/A-")){
@@ -214,14 +247,24 @@ const proceedCartController = async (req, res) => {
 				let barcodeOnly = barcodes[i].split("|")[0].trim();
 				barcodeTrimmed = barcodeOnly;
 				getProduct = `
-				SELECT p.barcode, p.name, p.description AS desc, (s.add_dtls->>'pricePerWeight')::numeric AS price
+				SELECT p.pk, p.name, p.description AS desc, (s.add_dtls->>'pricePerWeight')::numeric AS price
 				FROM products p
 				JOIN stocks s ON p.pk = s.product_id
-				WHERE p.barcode = $1
-			`;	
+				WHERE p.barcode = $1 and p.user_id=$2
+			`;
+			const getProductIdQuery = "SELECT pk FROM products WHERE barcode = $1 AND user_id = $2";
 			try {
 				client.query("BEGIN");
-				const productResult = await client.query(getProduct, [barcodeTrimmed]);
+				productVo.barcode = barcodeTrimmed;
+				productVo.productId = (await client.query(getProductIdQuery, [barcodeTrimmed, userId])).rows[0]?.pk || null;
+				productVo.quantity = weight;
+				const updateInventoryResult = await checkoutInventory(client, productVo);
+				if (updateInventoryResult.status === 404) {
+					await client.query("ROLLBACK");
+					return res.status(404).json({ error: "Product not found or out of stock" });
+				}
+				
+				const productResult = await client.query(getProduct, [barcodeTrimmed, userId]);
 				if (productResult.rows.length === 0) {
 					return res.status(404).json({
 						error: `Product with barcode ${cartList[i]} not found in cart`,
@@ -273,8 +316,10 @@ const finalizeSaleController = async (req, res) => {
 	try {
 		await client.query("BEGIN");
 
-		const userDtls= await getUserDtlsWithToken(req.headers["authorization"]?.split(" ")[1]);
-		const upiId=userDtls.additional_dtls.upiId ||"rajeshkumaryadav98@oksbi"
+		const authHeader = req.headers["authorization"];
+		const token = authHeader.split(" ")[1];
+		const userId=(await new UserDtlsObj(client, token).getUser()).id;
+
 
 		const getCartDetails = "select item_details, total_amount from carts where cart_id=$1";
 		const cartDetailsResult = await client.query(getCartDetails, [cartId]);
@@ -301,8 +346,15 @@ const finalizeSaleController = async (req, res) => {
 			paymentLink: "",
 		};
 		
-		const upiQrContent=`upi://pay?pa=${upiId}&pn=Rajesh&am=${total_amount}&cu=INR&aid=uGICAgMDh6cTFFQ`;
-		bill.paymentLink=upiQrContent;
+		const upiQrContent=''
+		if(paymentMode==='UPI'){
+			const upiIdQuery="select additional_dtls->>'upi_id' from users where pk=$1"
+			const upiIdResult = await client.query(upiIdQuery, [userId]);
+			const upiId = upiIdResult.rows[0]?.upi_id || "rajeshsarkar0007@oksbi";
+
+			upiQrContent=`upi://pay?pa=${upiId}&pn=Rajesh&am=${total_amount}&cu=INR&aid=uGICAgMDh6cTFFQ`;
+			bill.paymentLink=upiQrContent;
+		}
 		const addBillQuery =
 			"update carts set custname=$1, custphone=$2, payment_mode=$3 where cart_id=$4 returning *";
 		const insertBillResult = await client.query(addBillQuery, [
@@ -316,13 +368,6 @@ const finalizeSaleController = async (req, res) => {
 			await client.query("ROLLBACK");
 			return res.status(500).json({ error: "Failed to finalize sale" });
 		}
-		const user = await getUserDtlsWithToken(req.headers["authorization"]?.split(" ")[1]);
-		if (!user) {
-			await client.query("ROLLBACK");
-			return res.status(401).json({ error: "Unauthorized" });
-		}
-		const userId = user.id;
-
 		const orderCheckedOut =
 			"update carts set user_id= $1, order_status=$2 where cart_id=$3 returning *";
 		const orderCheckedOutResult = await client.query(orderCheckedOut, [userId, "completed", cartId]);
@@ -401,8 +446,8 @@ const showProductController = async (req, res) => {
 				SELECT p.barcode, p.name, p.price, p.description, s.stock
 				FROM products p
 				JOIN stocks s ON p.pk = s.product_id
-				WHERE p.user_id = $1
-				ORDER BY p.created_dt DESC limit $2 offset $3
+				WHERE p.user_id = $1 and active_flag=true
+				ORDER BY p.created_dt DESC limit $2 offset $3 
 			`;
 			let limit=rowsPerPage
 			let offset=(pageNo-1)*rowsPerPage
@@ -629,8 +674,7 @@ export {
 	showProductController,
 	stockAlertController,
 	salesReportController,
-	periodicSalesReport
+	periodicSalesReport,
+	deleteProductController
 };
-
-
 
