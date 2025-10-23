@@ -226,6 +226,24 @@ const checkoutInventory = async (client, productVo) => {
 		return result.rows[0];
 }
 
+const adjustedInventory = async (client, productVo) => {
+		let query='';
+		if(productVo.barcode.startsWith("N/A-")){
+			query=`update stocks set stock=stock+$1, add_dtls=jsonb_set(add_dtls, '{weight}', 
+			to_jsonb((add_dtls->>'weight')::numeric + $1::numeric)) where product_id=$2 returning *`;
+
+			const result = await client.query(query, [productVo.quantity, productVo.productId]);
+			if (result.rows.length === 0)
+				return { status: 400, body: { error: "Failed to remove item from cart" } };
+			return { status: 200, body: { message: "Item removed from cart", stock: result.rows[0] } };
+		}
+		query = "update stocks set stock=stock+1 where product_id=$1 returning *";
+		const result = await client.query(query, [productVo.productId]);
+		if (result.rows.length === 0)
+			return { status: 400, body: { error: "Failed to remove item from cart" } };
+		return { status: 200, body: { message: "Item removed from cart", stock: result.rows[0] } };
+}
+
 export { 
 	checkProductExists, 
 	addStock, 
@@ -233,5 +251,6 @@ export {
 	addProduct, 
 	addStockOfNonQuantizedItem, 
 	updateProductIfExists,
-	checkoutInventory
+	checkoutInventory,
+	adjustedInventory
 };

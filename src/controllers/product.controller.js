@@ -7,6 +7,7 @@ import { ResponseBody } from '../utils/responseBody.js';
 import { UserDtlsObj } from "../utils/userDtlsObj.js";
 import { updateProductIfExists } from "../utils/product.utils.js";
 import { checkoutInventory } from "../utils/product.utils.js";
+import { adjustedInventory } from "../utils/product.utils.js";
 
 const addProductController = async (req, res) => {
 	const responseBody = new ResponseBody();
@@ -270,10 +271,13 @@ const proceedCartController = async (req, res) => {
 				}
 				
 				const productResult = await client.query(getProduct, [barcodeTrimmed, userId]);
-				if (productResult.rows.length === 0) {
-					return res.status(404).json({
-						error: `Product with barcode ${cartList[i]} not found in cart`,
-					});
+				
+				if(productResult.rows.length === 0){
+					const adjustedInventoryResult = await adjustedInventory(client, productVo);
+					if(adjustedInventoryResult.status === 404 || adjustedInventoryResult.status === 400){
+						await client.query("ROLLBACK");
+						return res.status(404).json({ error: "Product not found or out of stock" });
+					}
 				}
 				const product = productResult.rows[0];
 				totalAmount += parseFloat(product.price) * parseFloat(weight);
@@ -292,7 +296,8 @@ const proceedCartController = async (req, res) => {
 		}
 		const cartId = "cart_" + Date.now();
 		const addCartListQuery = `
-		insert into carts (cart_id, item_details, total_amount, created_dt, payment_mode) values ($1,$2,$3,now(),'pending') returning *`;
+		insert into carts (cart_id, item_details, total_amount, created_dt, payment_mode) 
+		values ($1,$2,$3,now(),'pending') returning *`;
 		const insertCartListResult = await pool.query(addCartListQuery, [
 			cartId,
 			JSON.stringify(cartItemList),
@@ -475,10 +480,9 @@ const showProductController = async (req, res) => {
 			returnObj.products = result.rows;
 		}
 		responseBody.setData(returnObj, "Products retrieved successfully", 200);
-		await redisClient.setEx(cacheKey, 30, JSON.stringify(responseBody.getResponse()));
+		await redisClient.setEx(cacheKey, 60 * 60, JSON.stringify(responseBody.getResponse()));
 		return res.status(responseBody.getResponse().statusCode).json(responseBody.getResponse().body);
 	} catch (err) {
-	console.error("❌ Product API Error →", err.stack || err);
 	if (client) {
 		try {
 		await client.query("ROLLBACK").catch(() => {});
@@ -531,6 +535,7 @@ const stockAlertController = async (req, res) => {
 };
 
 const salesReportController = async (req, res) => {
+	const responseBody = new ResponseBody();
 	const { days } = req.body;
 	if (!days || isNaN(days) || days <= 0) {
 		return res.status(400).json({ error: "Invalid number of days" });
@@ -538,22 +543,45 @@ const salesReportController = async (req, res) => {
 	const client = await pool.connect();
 	try {
 		client.query("BEGIN");
-		const user = await getUserDtlsWithToken(req.headers["authorization"]?.split(" ")[1]);
-		if (!user) {
-			return res.status(401).json({ error: "Unauthorized" });
-		}
-		const userId = user.id;
-		const salesData = await periodicSalesReport(client, days, userId);
-		client.query("COMMIT");
-		if (salesData.length === 0) {
-			return res.status(404).json({ error: "No sales data found for the specified period" });
-			// Removed unreachable code
+		const authHeader = req.headers["authorization"];
+		const token = authHeader.split(" ")[1];
+		const userId=(await new UserDtlsObj(client, token).getUser()).id;
+
+		const cacheKey = `salesData:${token}:${days}`;
+		const cached = await redisClient.get(cacheKey);
+		
+		const returnObj = {
+			salesData: [],
+			cached: false,
+		};
+		
+		if(cached){
+			const cachedResponse = JSON.parse(cached);
+			returnObj.salesData = cachedResponse.body.data.salesData;
+			returnObj.cached = true;
+			responseBody.setData(returnObj, "Sales report retrieved from cache", 200);
+			return res
+			.status(responseBody.getResponse().statusCode)
+			.json(responseBody.getResponse().body);
 		}
 
-		res.status(200).json(salesData);
-		client.release();
+		const salesData = await periodicSalesReport(client, days, userId);
+		client.query("COMMIT");
+		if (salesData.length === 0)
+			return res.status(404).json({ error: "No sales data found for the specified period" });
+		
+		returnObj.salesData = salesData;
+		returnObj.cached = false;
+		responseBody.setData(returnObj, "Sales report generated successfully", 200);
+		await redisClient.setEx(cacheKey, 60*60, JSON.stringify(responseBody.getResponse()));
+		return res
+		.status(responseBody.getResponse().statusCode)
+		.json(responseBody.getResponse().body);
+
 	} catch (err) {
 		res.status(500).json({ error: "Internal server error" });
+	}finally{
+		if(client) client.release()
 	}
 };
 
