@@ -294,6 +294,7 @@ const proceedCartController = async (req, res) => {
 				return res.status(500).json({ error: "Database query failed" });
 			}
 		}
+	    }
 		const cartId = "cart_" + Date.now();
 		const addCartListQuery = `
 		insert into carts (cart_id, item_details, total_amount, created_dt, payment_mode) 
@@ -315,7 +316,7 @@ const proceedCartController = async (req, res) => {
 			items: cartItemList,
 		});
 }
-}
+
 
 const finalizeSaleController = async (req, res) => {
 	const { customerName, customerPhone, paymentMode, cartId } = req.body;
