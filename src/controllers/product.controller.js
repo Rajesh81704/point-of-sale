@@ -40,7 +40,6 @@ const addProductController = async (req, res) => {
 			mfgDate: req.body.mfgDate,
 			expDate: req.body.expDate
 		}
-
 		if(isQuantizedItem===false && barcodeTrimmed.includes("N/A-")){
 			const result = await addWithOutBarcode(client, productVo)
 			await client.query("COMMIT");

@@ -165,7 +165,7 @@ const updateStock = async (client, productVo) => {
         WHERE product_id = $2 
         RETURNING *
     `;
-	const result = await client.query(query, [quantity, productId]);
+	const result = await client.query(query, [productVo.quantity, productId]);
 	return result.rows[0];
 };
 
