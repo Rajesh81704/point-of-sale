@@ -403,105 +403,76 @@ const finalizeSaleController = async (req, res) => {
 
 
 const showProductController = async (req, res) => {
-	const responseBody = new ResponseBody();
-	const { searchKey, rowsPerPage, pageNo } = req.query;
-	const authHeader = req.headers["authorization"];
-	if (!authHeader) return res.status(401).json({ error: "Unauthorized" });
+  const responseBody = new ResponseBody();
+  const { searchKey } = req.query;
+  const rowsPerPage = parseInt(req.query.rowsPerPage) || 10;
+  const pageNo = parseInt(req.query.pageNo) || 1;
 
-	const token = authHeader.split(" ")[1];
-	const cacheKey = `products:${token}:${searchKey || "*"}`;
+  const authHeader = req.headers["authorization"];
+  if (!authHeader) return res.status(401).json({ error: "Unauthorized" });
 
-	let client;
-	const timeoutMs = 5000;
-	const queryWithTimeout = (promise, ms) =>
-		new Promise((resolve, reject) => {
-			const timer = setTimeout(() => {
-				reject(new Error("Query timed out"));
-			}, ms);
-			promise
-				.then((res) => {
-					clearTimeout(timer);
-					resolve(res);
-				})
-				.catch((err) => {
-					clearTimeout(timer);
-					reject(err);
-				});
-		});
-	try {
-		const returnObj={
-			products: [],
-			cached: false
-		}
-		const cached = await redisClient.get(cacheKey);
-		if (cached){
-			const cachedResponse = JSON.parse(cached);
-			cachedResponse.body.cached = true; 	
-			returnObj.cached=true
-			 return res
-    		.status(cachedResponse.statusCode)
-    		.json(cachedResponse.body);
-		} 
+  const token = authHeader.split(" ")[1];
 
-		client = await pool.connect();
-		const userId= (await new UserDtlsObj(client, token).getUser()).id;
-		
-		if (!searchKey || searchKey.trim() === "") {
-			client.release();
-			return res.status(400).json({ error: "Search key is required" });
-		}
-		let query, params;
-		if (searchKey === "*") {
-			query = `
-				SELECT p.barcode, p.name, p.price, p.description, p.product_image, s.stock
-				FROM products p
-				JOIN stocks s ON p.pk = s.product_id
-				WHERE p.user_id = $1 and p.active_flag=true
-				ORDER BY p.created_dt DESC limit $2 offset $3 
-			`;
-			let limit=rowsPerPage
-			let offset=(pageNo-1)*rowsPerPage
-			params = [userId, limit, offset];
+  const timeoutMs = 5000;
+  const queryWithTimeout = (promise, ms) =>
+    new Promise((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error("Query timed out")), ms);
+      promise.finally(() => clearTimeout(timer)).then(resolve).catch(reject);
+    });
 
-		} else {
-			query = `
-				SELECT p.barcode, p.name, p.price, p.description, p.product_image, s.stock
-				FROM products p
-				JOIN stocks s ON p.pk = s.product_id
-				WHERE p.user_id = $1 AND (p.name ILIKE $2 OR p.barcode ILIKE $2) and p.active_flag=true
-				ORDER BY p.created_dt DESC
-			`;
-			params = [userId, `%${searchKey}%`];
-		}
-		
-		const result = await queryWithTimeout(client.query(query, params), timeoutMs);
-		if(!cached) {
-			returnObj.cached=false
-			returnObj.products = result.rows;
-		}
-		responseBody.setData(returnObj, "Products retrieved successfully", 200);
-		await redisClient.setEx(cacheKey, 60 * 60, JSON.stringify(responseBody.getResponse()));
-		return res.status(responseBody.getResponse().statusCode).json(responseBody.getResponse().body);
-	} catch (err) {
-	if (client) {
-		try {
-		await client.query("ROLLBACK").catch(() => {});
-		client.release();
-		} catch (e) {
-		console.error("Error releasing client:", e);
-		}
-	}
-	return res.status(500).json({ error: err.message });
-	} finally {
-	if (client) {
-		try {
-		client.release();
-		} catch (e) {
-		console.error("Final release failed:", e);
-		}
-	}
-	}
-}
+  let client;
+  try {
+    client = await pool.connect();
+    const user = await new UserDtlsObj(client, token).getUser();
+    if (!user) return res.status(401).json({ error: "Invalid user token" });
+
+    if (!searchKey || searchKey.trim() === "")
+      return res.status(400).json({ error: "Search key is required" });
+
+    let query, params;
+
+    if (searchKey === "*") {
+      query = `
+        SELECT p.barcode, p.name, p.price, p.description, p.product_image, s.stock
+        FROM products p
+        LEFT JOIN stocks s ON p.pk = s.product_id
+        WHERE p.user_id = $1 AND p.active_flag = true
+        ORDER BY p.created_dt DESC
+        LIMIT $2::int OFFSET $3::int
+      `;
+      params = [user.id, rowsPerPage, (pageNo - 1) * rowsPerPage];
+    } else {
+      query = `
+        SELECT p.barcode, p.name, p.price, p.description, p.product_image, s.stock
+        FROM products p
+        LEFT JOIN stocks s ON p.pk = s.product_id
+        WHERE p.user_id = $1 AND (p.name ILIKE $2 OR p.barcode ILIKE $2)
+          AND p.active_flag = true
+        ORDER BY p.created_dt DESC
+      `;
+      params = [user.id, `%${searchKey}%`];
+    }
+
+    const result = await queryWithTimeout(client.query(query, params), timeoutMs);
+    const returnObj = { products: result.rows };
+    const message =
+      result.rows.length > 0
+        ? "Products retrieved successfully"
+        : "No products found";
+
+    responseBody.setData(returnObj, message, 200);
+
+    return res
+      .status(responseBody.getResponse().statusCode)
+      .json(responseBody.getResponse().body);
+
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  } finally {
+    if (client) client.release();
+  }
+};
+
 
 const stockAlertController = async (req, res) => {
 	const client = await pool.connect();
