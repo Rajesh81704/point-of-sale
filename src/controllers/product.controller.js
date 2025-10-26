@@ -454,7 +454,7 @@ const showProductController = async (req, res) => {
 		let query, params;
 		if (searchKey === "*") {
 			query = `
-				SELECT p.barcode, p.name, p.price, p.description, s.stock
+				SELECT p.barcode, p.name, p.price, p.description, p.product_image, s.stock
 				FROM products p
 				JOIN stocks s ON p.pk = s.product_id
 				WHERE p.user_id = $1 and active_flag=true
@@ -466,7 +466,7 @@ const showProductController = async (req, res) => {
 
 		} else {
 			query = `
-				SELECT p.barcode, p.name, p.price, p.description, s.stock
+				SELECT p.barcode, p.name, p.price, p.description, p.product_image, s.stock
 				FROM products p
 				JOIN stocks s ON p.pk = s.product_id
 				WHERE p.user_id = $1 AND (p.name ILIKE $2 OR p.barcode ILIKE $2)
@@ -589,8 +589,8 @@ const salesReportController = async (req, res) => {
 const periodicSalesReport = async (client, days, userId) => {
 	client = client || (await pool.connect());
 	const reportData = {
-		item_details: [],
-		total_amount: Number,
+		itemDetails: [],
+		totalAmount: Number,
 		top5Products: [],
 		least5Products: [],
 		sellChartData: [],
@@ -615,8 +615,8 @@ const periodicSalesReport = async (client, days, userId) => {
 	try {
 		const result = await client.query(reportQuery);
 		if (result.rows.length !== 0) {
-			reportData.item_details = result.rows;
-			reportData.total_amount = result.rows.reduce(
+			reportData.itemDetails = result.rows;
+			reportData.totalAmount = result.rows.reduce(
 				(total, item) => total + parseFloat(item.cart_amount),
 				0,
 			);
