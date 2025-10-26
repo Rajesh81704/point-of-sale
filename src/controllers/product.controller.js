@@ -405,7 +405,7 @@ const finalizeSaleController = async (req, res) => {
 const showProductController = async (req, res) => {
 	const responseBody = new ResponseBody();
 	const { searchKey } = req.params;
-	const { rowsPerPage, pageNo } = req.body;
+	const { rowsPerPage, pageNo } = req.params;
 	const authHeader = req.headers["authorization"];
 	if (!authHeader) return res.status(401).json({ error: "Unauthorized" });
 
