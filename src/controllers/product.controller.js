@@ -468,7 +468,7 @@ const showProductController = async (req, res) => {
 				SELECT p.barcode, p.name, p.price, p.description, p.product_image, s.stock
 				FROM products p
 				JOIN stocks s ON p.pk = s.product_id
-				WHERE p.user_id = $1 AND (p.name ILIKE $2 OR p.barcode ILIKE $2) aand p.active_flag=true
+				WHERE p.user_id = $1 AND (p.name ILIKE $2 OR p.barcode ILIKE $2) and p.active_flag=true
 				ORDER BY p.created_dt DESC
 			`;
 			params = [userId, `%${searchKey}%`];
