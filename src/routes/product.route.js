@@ -26,8 +26,6 @@ productRouter.get("/stock-alert", protectedRoute, stockAlertController);
 
 productRouter.post("/sales-report", protectedRoute, salesReportController);
 
-productRouter.post("/sales-report", protectedRoute, salesReportController);
-
 productRouter.post("/delete-product", protectedRoute, deleteProductController);
 
 export { productRouter };

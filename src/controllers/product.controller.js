@@ -474,6 +474,8 @@ const showProductController = async (req, res) => {
 
 
 const stockAlertController = async (req, res) => {
+	const authHeader = req.headers["authorization"];
+  	if (!authHeader) return res.status(401).json({ error: "Unauthorized" });
 	const client = await pool.connect();
 	const lowStockQuery = `
 		SELECT p.barcode, p.name, s.stock
@@ -486,12 +488,8 @@ const stockAlertController = async (req, res) => {
 	`;
 	try {
 		await client.query("BEGIN");
-		const user = await getUserDtlsWithToken(req.headers["authorization"]?.split(" ")[1]);
-		if (!user) {
-			await client.query("ROLLBACK");
-			return res.status(401).json({ error: "Unauthorized" });
-		}
-		const userId = user.id;
+		const token = authHeader.split(" ")[1];
+		const userId=(await new UserDtlsObj(client, token).getUser()).id;		
 		const result = await client.query(lowStockQuery, [userId]);
 		await client.query("COMMIT");
 		return res.status(200).json({ lowStockProducts: result.rows });
