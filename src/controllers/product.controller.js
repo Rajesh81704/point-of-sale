@@ -221,100 +221,124 @@ const deleteProductController = async (req, res) => {
 // 		return res.status(200).json({ message: "Item removed from cart" });
 // }
 
-
 const proceedCartController = async (req, res) => {
-		const { barcodes } = req.body;
+	const { barcodes } = req.body;
+	if (!barcodes || barcodes.length === 0) {
+		return res.status(400).json({ error: "Cart is empty" });
+	}
+
+	const authHeader = req.headers["authorization"];
+	if (!authHeader) return res.status(401).json({ error: "Unauthorized" });
+
+	const token = authHeader.split(" ")[1];
+	const client = await pool.connect();
+
+	try {
+		await client.query("BEGIN");
+		const userId = (await new UserDtlsObj(client, token).getUser()).id;
 		let cartItemList = [];
 		let totalAmount = 0;
-		let client = await pool.connect();
-		const authHeader = req.headers["authorization"];
-		const token = authHeader.split(" ")[1];
-		const userId=(await new UserDtlsObj(client, token).getUser()).id;
 
-		let productVo={
-			userId: userId,
-			barcode: '',
-			productId: ''
-		}
-
-		if (!barcodes || barcodes.length === 0) {
-			return res.status(400).json({ error: "Cart is empty" });
-		}
 		for (let i = 0; i < barcodes.length; i++) {
-			let getProduct = `
-				SELECT p.pk, p.name, p.description AS desc, p.price 
-				FROM products p 
-				WHERE p.barcode = $1 and p.user_id=$2 and p.active_flag=true
-			`;
-			let barcodeTrimmed = barcodes[i].trim();
-			if(barcodes[i].startsWith("N/A-")){
-				const weight = barcodes[i].split("|")[1].trim();
-				let barcodeOnly = barcodes[i].split("|")[0].trim();
-				barcodeTrimmed = barcodeOnly;
-				getProduct = `
-				SELECT p.pk, p.name, p.description AS desc, (s.add_dtls->>'pricePerWeight')::numeric AS price
-				FROM products p
-				JOIN stocks s ON p.pk = s.product_id
-				WHERE p.barcode = $1 and p.user_id=$2 and p.active_flag=true
-			`;
-			const getProductIdQuery = "SELECT pk FROM products WHERE barcode = $1 AND user_id = $2";
-			try {
-				client.query("BEGIN");
-				productVo.barcode = barcodeTrimmed;
-				productVo.productId = (await client.query(getProductIdQuery, [barcodeTrimmed, userId])).rows[0]?.pk || null;
-				productVo.quantity = weight;
-				const updateInventoryResult = await checkoutInventory(client, productVo);
-				if (updateInventoryResult.status === 404) {
-					await client.query("ROLLBACK");
-					return res.status(404).json({ error: "Product not found or out of stock" });
-				}
-				
-				const productResult = await client.query(getProduct, [barcodeTrimmed, userId]);
-				
-				if(productResult.rows.length === 0){
-					const adjustedInventoryResult = await adjustedInventory(client, productVo);
-					if(adjustedInventoryResult.status === 404 || adjustedInventoryResult.status === 400){
-						await client.query("ROLLBACK");
-						return res.status(404).json({ error: "Product not found or out of stock" });
-					}
-				}
-				const product = productResult.rows[0];
-				totalAmount += parseFloat(product.price) * parseFloat(weight);
+			const rawBarcode = barcodes[i];
+			let barcode = rawBarcode.trim();
+			const [barcodeOnly, unitStr] = barcode.split("|").map(x => x.trim());
 
-				cartItemList.push({
-					barcode: product.barcode,
-					name: product.name,
-					description: product.desc,
-					price: parseFloat(product.price),
-				});
-			} catch (err) {
-				console.error(err);
-				await client.query("ROLLBACK");
-				return res.status(500).json({ error: "Database query failed" });
+			barcode = barcodeOnly;
+			let productQuery = `
+				SELECT p.pk, p.name, p.barcode, p.description as desc, (s.add_dtls->>'discount')::int4 as discnt, p.price
+				FROM products p left join stocks s ON p.pk = s.product_id
+				WHERE p.barcode = $1 AND p.user_id = $2 AND p.active_flag = true
+			`;
+			let productParams = [barcodeOnly, userId];
+			let quantity;
+			quantity = parseFloat(unitStr) || 1;
+
+			if (barcode.startsWith("N/A-")) {
+				productQuery = `
+ 				SELECT p.pk, p.name, p.barcode, p.description AS desc,
+				(s.add_dtls->>'pricePerWeight')::numeric AS price,
+				(s.add_dtls->>'discount')::int4 as discnt
+				FROM products p
+				left JOIN stocks s ON p.pk = s.product_id
+				WHERE p.barcode = $1 AND p.user_id = $2 AND p.active_flag = true
+				`;
 			}
+			
+			let productResult = await client.query(productQuery, productParams);
+			if (productResult.rows.length === 0) {
+				return res.status(404).json({ error: `Product with barcode ${barcode} not found` });
+			}
+			const product = productResult.rows[0];
+			const productVo = {
+				userId,
+				barcode,
+				productId: product.pk,
+				quantity,
+				price: product.price,
+				discount: product.discnt || 0,
+				priceAfterDiscount: parseFloat(product.price - (product.price * (product.discnt || 0) / 100))
+			};
+			console.log("Processing product:", productVo);
+			let inventoryResult = await checkoutInventory(client, productVo)
+			if(inventoryResult.length===0){
+				await client.query("ROLLBACK");
+				let inventoryResult = await adjustedInventory(client, productVo);
+				if (inventoryResult.length===0) {
+					await client.query("ROLLBACK");
+					return res.status(400).json({ error: inventoryResult.body.error || "Failed to adjust inventory" });
+				}
+			}
+			totalAmount += productVo.priceAfterDiscount * quantity;
+			cartItemList.push({
+				productId: product.pk,
+				barcode: product.barcode,
+				name: product.name,
+				description: product.desc,
+				price: parseFloat(product.price),
+				quantity,
+				discount: parseFloat(product.discnt) || 0,
+			});
 		}
-	    }
 		const cartId = "cart_" + Date.now();
-		const addCartListQuery = `
-		insert into carts (cart_id, item_details, total_amount, created_dt, payment_mode) 
-		values ($1,$2,$3,now(),'pending') returning *`;
-		const insertCartListResult = await pool.query(addCartListQuery, [
+		const insertCartQuery = `
+			INSERT INTO carts (cart_id, item_details, total_amount, created_dt, payment_mode) 
+			VALUES ($1, $2, $3, NOW(), 'pending') RETURNING cart_id
+		`;
+		const insertResult = await client.query(insertCartQuery, [
 			cartId,
 			JSON.stringify(cartItemList),
-			totalAmount,
+			totalAmount
 		]);
-		client.query("COMMIT");
-		if (insertCartListResult.rows.length === 0) {
+
+		if (insertResult.rows.length === 0) {
+			await client.query("ROLLBACK");
+			for(let i=0;i<cartItemList.length;i++){
+				const productDetails=cartItemList[i];
+				const revertVo={
+					productId: productDetails.productId,
+					quantity: productDetails.quantity
+				};
+				await adjustedInventory(client, revertVo);
+			}
 			return res.status(500).json({ error: "Failed to proceed cart" });
 		}
-		client.release();
+
+		await client.query("COMMIT");
 		return res.status(200).json({
 			message: "Cart proceeded",
-			cartId: insertCartListResult.rows[0].cart_id,
-			totalAmount: totalAmount,
-			items: cartItemList,
+			cartId,
+			totalAmount,
+			items: cartItemList
 		});
-}
+	} catch (err) {
+		console.error("Error in proceedCartController:", err);
+		await client.query("ROLLBACK");
+		return res.status(500).json({ error: "Database operation failed" });
+	} finally {
+		client.release();
+	}
+};
 
 
 const finalizeSaleController = async (req, res) => {

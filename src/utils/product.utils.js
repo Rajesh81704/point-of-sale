@@ -27,13 +27,14 @@ const addStock = async (client, productVo) => {
 	const quantity = productVo.quantity;
 	const mfgDate = productVo.mfgDate;
 	const expDate = productVo.expDate;
+	const discount = productVo.discount || 0;
 
 	const query = `
         INSERT INTO stocks (product_id, stock, last_stock, created_dt, add_dtls) 
         VALUES ($1, $2, $3, NOW(), $4::jsonb) 
         RETURNING *
     `;
-	const result = await client.query(query, [productId, quantity, quantity, JSON.stringify({ mfgDate, expDate, unit: productVo.unit, pricePerUnit: productVo.pricePerUnit })]);
+	const result = await client.query(query, [productId, quantity, quantity, JSON.stringify({ mfgDate, expDate, unit: productVo.unit, pricePerUnit: productVo.pricePerUnit, discount })]);
 	return result.rows[0];
 };
 
