@@ -385,7 +385,8 @@ const finalizeSaleController = async (req, res) => {
 			const upiIdResult = await client.query(upiIdQuery, [userId]);
 			let upiId = upiIdResult.rows[0]?.upi_id || "rajeshsarkar0007@oksbi";
 
-			upiQrContent=`upi://pay?pa=${upiId}&pn=Rajesh&am=${total_amount}&cu=INR&aid=uGICAgMDh6cTFFQ`;
+			upiQrContent=
+			`upi://pay?pa=${upiId}=${total_amount}&cu=INR&aid=uGICAgMDh6cTFFQ`;
 			bill.paymentLink=upiQrContent;
 		}
 		const addBillQuery =

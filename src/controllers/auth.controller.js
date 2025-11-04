@@ -41,7 +41,7 @@ const authRegisterController = async (req, res) => {
 			return res.status(409).json({ error: "Username, email, or phone number already exists" });
 		}
 		const insertUserQuery = `
-            INSERT INTO users (username, password, email, phoneNo, created_dt, additional_dtls, profile_image, additional_details) 
+            INSERT INTO users (username, password, email, phoneNo, created_dt, additional_dtls, profile_image) 
             VALUES ($1, $2, $3, $4, now(), $5, $6, $7::jsonb) 
             RETURNING *`;
 			
@@ -50,9 +50,8 @@ const authRegisterController = async (req, res) => {
 			hashedPassword,
 			email,
 			phoneNo,
-			additional_dtls,
-			profile_image,
 			JSON.stringify({ upi_id: upiId }),
+			profile_image,
 		]);
 
 		if (insertUserResult.rows.length === 0) {
