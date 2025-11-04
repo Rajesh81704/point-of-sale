@@ -3,6 +3,10 @@ const ACCESS_TOKEN_SECRET = process.env.ACCESS_TOKEN_SECRET;
 const REFRESH_TOKEN_SECRET = process.env.REFRESH_TOKEN_SECRET;
 import { generateAccessToken, generateRefreshToken } from "../utils/util.js";
 import crypto from "crypto";
+import bcrypt from "bcrypt";
+import {redisClient} from "../db/redis.js";
+
+import {SmtpService} from "../utils/smtp.service.js";
 
 const refreshTokens = new Map();
 const logoutAuthController = (req, res) => {
@@ -103,4 +107,83 @@ const isLoggedController = async (req, res) => {
 	return res.status(200).json({ message: "User is logged in", user, isLogged: true });
 };
 
-export { logoutAuthController, authRegisterController, authLoginController, isLoggedController };
+
+
+const recoverPasswordController = async (req, res) => {
+	const { email, phoneNo } = req.body;
+	if (!email && !phoneNo) {
+		return res.status(400).json({ error: "Email or phone number is required" });
+	}
+	const client = await pool.connect();
+	try {
+		const getEmailQuery = `select pk, email from users where ${email ? "email=$1" : "phoneNo=$1"}`;
+		const userResult = await client.query(getEmailQuery, [email || phoneNo]);
+		if (userResult.rows.length === 0) {
+			return res.status(404).json({ error: "User not found" });
+		}
+		const userEmail = userResult.rows[0].email;
+		const userId = userResult.rows[0].pk;
+		const otp = generateOTP(4);
+		await redisClient.set(userId, otp, "EX", 300);
+		const smtpService = new SmtpService();
+		await smtpService.sendMail({
+			to: userEmail,
+			subject: "Password Recovery OTP",
+			text: `Your OTP for password recovery is: ${otp}`,
+			html: `<p>Your OTP for password recovery is: <strong>${otp}</strong></p>`,
+		});
+
+		return res.status(200).json({ message: "OTP sent successfully", otp });
+	} catch (err) {
+		console.error("Error recovering password:", err);
+		return res.status(500).json({ error: "Internal server error" });
+	} finally {
+		client.release();
+	}
+};
+
+const generateOTP = (noOfDigits) => {
+	const otp = Math.random().toString().slice(-noOfDigits);
+	return otp;
+}
+
+const verifyAndChangePasswordController = async (req, res) => {
+	const { userId, otp, newPassword } = req.body;
+	if (!userId || !otp || !newPassword) {
+		return res.status(400).json({ error: "User ID, OTP, and new password are required" });
+	}
+	try {
+		const savedOtp=await redisClient.get(userId);
+		if (savedOtp !== otp) {
+			return res.status(400).json({ error: "Invalid or expired OTP" });
+		}
+		const client = await pool.connect();
+		const passwordChanged=await changePassword(client, userId, newPassword);
+		if(!passwordChanged){
+			return res.status(500).json({ error: "Failed to change password" });
+		}
+		await redisClient.del(userId);
+		return res.status(200).json({ message: "Password changed successfully" });
+	} catch (err) {
+		console.error("Error changing password:", err);
+		return res.status(500).json({ error: "Internal server error" });
+	} finally {
+		client.release();
+	}
+}
+
+const changePassword = async (client, userId, newPassword) => {
+	const hashedPassword=await bcrypt.hash(newPassword, 64);
+	const updatePasswordQuery = "update users set password=$1 where pk=$2 returning pk";
+	const result = await client.query(updatePasswordQuery, [hashedPassword, userId]);
+	return result.rowCount > 0;
+};
+
+export { 
+	logoutAuthController, 
+	authRegisterController, 
+	authLoginController, 
+	isLoggedController, 
+	recoverPasswordController, 
+	verifyAndChangePasswordController 
+};

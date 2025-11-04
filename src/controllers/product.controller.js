@@ -1,6 +1,5 @@
 import { pool } from "../db/db.js";
 import { addStock, checkProductExists, updateStock, addStockOfNonQuantizedItem, updateStockOfNonQuantizedItem } from "../utils/product.utils.js";
-import { getUserDtlsWithToken } from "../utils/util.js";
 import { addProduct } from "../utils/product.utils.js";
 import { redisClient } from "../db/redis.js";
 import { ResponseBody } from '../utils/responseBody.js';
@@ -380,11 +379,11 @@ const finalizeSaleController = async (req, res) => {
 			paymentLink: "",
 		};
 		
-		const upiQrContent=''
+		let upiQrContent=''
 		if(paymentMode==='UPI'){
 			const upiIdQuery="select additional_dtls->>'upi_id' from users where pk=$1"
 			const upiIdResult = await client.query(upiIdQuery, [userId]);
-			const upiId = upiIdResult.rows[0]?.upi_id || "rajeshsarkar0007@oksbi";
+			let upiId = upiIdResult.rows[0]?.upi_id || "rajeshsarkar0007@oksbi";
 
 			upiQrContent=`upi://pay?pa=${upiId}&pn=Rajesh&am=${total_amount}&cu=INR&aid=uGICAgMDh6cTFFQ`;
 			bill.paymentLink=upiQrContent;
