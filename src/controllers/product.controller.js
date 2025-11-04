@@ -34,6 +34,7 @@ const addProductController = async (req, res) => {
 			add_dtls: {},
 			userId: userId,
 			discount: discount || 0,
+			
 			unit: unit || "pcs",
 			description: req.body.desc || (name+" | "+category+" | "+brand),
 			mfgDate: req.body.mfgDate,
