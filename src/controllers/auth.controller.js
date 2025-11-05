@@ -124,8 +124,11 @@ const recoverPasswordController = async (req, res) => {
 		const userEmail = userResult.rows[0].email;
 		const userId = userResult.rows[0].pk;
 		const otp = generateOTP(4);
-		await redisClient.set(userId, otp, "EX", 300);
+		await redisClient.del(userId);
+		await redisClient.set(userId, otp, { EX: 500 });
 		const smtpService = new SmtpService();
+
+
 		await smtpService.sendMail({
 			to: userEmail,
 			subject: "Password Recovery OTP",
@@ -149,12 +152,14 @@ const generateOTP = (noOfDigits) => {
 
 const verifyAndChangePasswordController = async (req, res) => {
 	const { userId, otp, newPassword } = req.body;
+	console.log(userId, otp, newPassword)
 	if (!userId || !otp || !newPassword) {
 		return res.status(400).json({ error: "User ID, OTP, and new password are required" });
 	}
 	try {
 		const savedOtp=await redisClient.get(userId);
-		if (savedOtp !== otp) {
+		console.log(savedOtp)
+		if (savedOtp.toString() !== otp.toString()) {
 			return res.status(400).json({ error: "Invalid or expired OTP" });
 		}
 		const client = await pool.connect();
@@ -162,21 +167,33 @@ const verifyAndChangePasswordController = async (req, res) => {
 		if(!passwordChanged){
 			return res.status(500).json({ error: "Failed to change password" });
 		}
-		await redisClient.del(userId);
+		if(passwordChanged){await redisClient.del(userId);}
 		return res.status(200).json({ message: "Password changed successfully" });
 	} catch (err) {
 		console.error("Error changing password:", err);
 		return res.status(500).json({ error: "Internal server error" });
-	} finally {
-		client.release();
 	}
 }
 
 const changePassword = async (client, userId, newPassword) => {
-	const hashedPassword=await bcrypt.hash(newPassword, 64);
-	const updatePasswordQuery = "update users set password=$1 where pk=$2 returning pk";
-	const result = await client.query(updatePasswordQuery, [hashedPassword, userId]);
-	return result.rowCount > 0;
+  console.log("Changing password...");
+  const hashedPassword = crypto.createHash("sha256").update(newPassword).digest("hex")
+  try {
+    await client.query("BEGIN");
+    const updatePasswordQuery = `
+      UPDATE users 
+      SET password = $1 
+      WHERE pk = $2 
+      RETURNING pk
+    `;
+    const result = await client.query(updatePasswordQuery, [hashedPassword, userId]);
+    await client.query("COMMIT");
+
+    return result.rowCount > 0;
+  } catch (err) {
+    await client.query("ROLLBACK");
+    throw err;
+  }
 };
 
 export { 
