@@ -132,7 +132,7 @@ const recoverPasswordController = async (req, res) => {
 			html: `<p>Your OTP for password recovery is: <strong>${otp}</strong></p>`,
 		});
 
-		return res.status(200).json({ message: "OTP sent successfully", otp });
+		return res.status(200).json({ message: "OTP sent successfully", userId });
 	} catch (err) {
 		console.error("Error recovering password:", err);
 		return res.status(500).json({ error: "Internal server error" });
