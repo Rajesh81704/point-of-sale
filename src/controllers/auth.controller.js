@@ -24,7 +24,7 @@ const logoutAuthController = (req, res) => {
 
 const authRegisterController = async (req, res) => {
 	const client = await pool.connect();
-	const { username, password, email, phoneNo, additional_dtls, profile_image, upiId } = req.body;
+	const { username, password, email, phoneNo, profile_image, upiId } = req.body;
 	if (!username || !password || !email || !phoneNo) {
 		return res.status(400).json({ error: "All fields are required" });
 	}
@@ -42,7 +42,7 @@ const authRegisterController = async (req, res) => {
 		}
 		const insertUserQuery = `
             INSERT INTO users (username, password, email, phoneNo, created_dt, additional_dtls, profile_image) 
-            VALUES ($1, $2, $3, $4, now(), $5, $6, $7::jsonb) 
+            VALUES  ($1, $2, $3, $4, $5, $6, $7)
             RETURNING *`;
 			
 		const insertUserResult = await client.query(insertUserQuery, [
@@ -50,6 +50,7 @@ const authRegisterController = async (req, res) => {
 			hashedPassword,
 			email,
 			phoneNo,
+			new Date(),
 			JSON.stringify({ upi_id: upiId }),
 			profile_image,
 		]);
